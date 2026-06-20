@@ -23,6 +23,8 @@
 |-------------|----------|
 | Local (direct) | `http://localhost:{service_port}` |
 | Local (gateway) | `http://localhost:8080` |
+| **Live EC2** | **`http://13.126.102.15:{service_port}`** |
+| **Live EC2 (gateway)** | **`http://13.126.102.15:8080`** |
 | Staging | `https://api-staging.neurosphere.io` |
 | Production | `https://api.neurosphere.io` |
 
@@ -80,7 +82,7 @@ All API responses use JSON with consistent structure:
 
 ## 1. Robot Command Service (Port 5050)
 
-Base URL: `http://localhost:5050`
+Base URL: `http://localhost:5050` · **Live:** `http://13.126.102.15:5050`
 
 ### GET /api/robots/status
 
@@ -306,7 +308,7 @@ curl -s -X POST http://localhost:5050/api/robots/command \
 
 ## 2. Diagnostic Engine Service (Port 3000)
 
-Base URL: `http://localhost:3000`
+Base URL: `http://localhost:3000` · **Live:** `http://13.126.102.15:3000`
 
 ### POST /api/diagnostics/analyze
 
@@ -489,7 +491,7 @@ curl -s http://localhost:3000/api/diagnostics/stats | jq .
 
 ## 3. Patient Monitor Service (Port 5001)
 
-Base URL: `http://localhost:5001`
+Base URL: `http://localhost:5001` · **Live:** `http://13.126.102.15:5001`
 
 ### GET /api/patients/vitals
 
@@ -784,7 +786,7 @@ curl -s "http://localhost:5001/api/patients/history/PAT-001?limit=10" | jq .
 
 ## 4. Telemetry Ingest Service (Port 5002)
 
-Base URL: `http://localhost:5002`
+Base URL: `http://localhost:5002` · **Live:** `http://13.126.102.15:5002`
 
 ### POST /api/telemetry/ingest
 
@@ -1056,7 +1058,7 @@ curl -s http://localhost:5002/api/telemetry/health-summary | jq .
 
 ## 5. API Gateway (Port 8080)
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost:8080` · **Live:** `http://13.126.102.15:8080`
 
 All upstream service endpoints are accessible through the gateway with the same paths. The gateway adds:
 

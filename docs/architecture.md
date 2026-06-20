@@ -14,6 +14,7 @@
 6. [Monitoring Architecture](#6-monitoring-architecture)
 7. [CI/CD Pipeline Architecture](#7-cicd-pipeline-architecture)
 8. [Disaster Recovery Architecture](#8-disaster-recovery-architecture)
+9. [Live EC2 Deployment](#9-live-ec2-deployment)
 
 ---
 
@@ -804,3 +805,68 @@ Layer 6: Data Encryption
 *For operational procedures, see [Operations Runbook](runbook.md).*
 *For deployment instructions, see [Deployment Guide](deployment-guide.md).*
 *For detailed API documentation, see [API Reference](api-reference.md).*
+
+---
+
+## 9. Live EC2 Deployment
+
+NeuroSphere is currently deployed and running on AWS EC2:
+
+### Instance Details
+
+| Attribute | Value |
+|-----------|-------|
+| **Instance Name** | `neurosphere-server` |
+| **Instance ID** | `i-0b838d997334670f2` |
+| **Instance Type** | `t3.small` |
+| **Region** | `ap-south-1` (Mumbai) |
+| **OS** | Amazon Linux 2023 |
+| **Public IP** | `13.126.102.15` |
+| **Containers Running** | 9 |
+
+### Live Service URLs
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                     LIVE EC2 DEPLOYMENT (13.126.102.15)                     │
+├──────────────────────────────────────┬─────────────────────────────────────────┤
+│ Service                              │ URL                                     │
+├──────────────────────────────────────┼─────────────────────────────────────────┤
+│ Dashboard                            │ http://13.126.102.15:3333               │
+│ Grafana (admin/neurosphere)          │ http://13.126.102.15:3001               │
+│ Jenkins CI/CD                        │ http://13.126.102.15:8081               │
+│ Prometheus                           │ http://13.126.102.15:9090               │
+│ Robot Command API                    │ http://13.126.102.15:5050               │
+│ Patient Monitor API                  │ http://13.126.102.15:5001               │
+│ Diagnostic Engine API                │ http://13.126.102.15:3000               │
+│ Telemetry Ingest API                 │ http://13.126.102.15:5002               │
+│ API Gateway                          │ http://13.126.102.15:8080               │
+└──────────────────────────────────────┴─────────────────────────────────────────┘
+```
+
+### Architecture with EC2 IP
+
+```
+  Internet
+     │
+     ▼
+┌─────────────────────────────────────────────────────┐
+│          EC2: 13.126.102.15 (t3.small)              │
+│          neurosphere-server                          │
+│          ap-south-1 (Mumbai)                         │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │           Docker Compose (9 containers)        │  │
+│  │                                                │  │
+│  │  :3333  ── Dashboard                           │  │
+│  │  :8080  ── Nginx Gateway ──┐                   │  │
+│  │  :5050  ── Robot Command   │  Core             │  │
+│  │  :5001  ── Patient Monitor │  Services         │  │
+│  │  :3000  ── Diagnostic Eng  │                   │  │
+│  │  :5002  ── Telemetry Ingest┘                   │  │
+│  │  :9090  ── Prometheus      ┐  Monitoring       │  │
+│  │  :3001  ── Grafana         ┘  Stack            │  │
+│  │  :8081  ── Jenkins CI/CD                       │  │
+│  └────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+```

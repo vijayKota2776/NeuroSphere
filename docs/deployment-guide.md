@@ -14,7 +14,8 @@
 6. [Vault Initialization](#6-vault-initialization)
 7. [Jenkins CI/CD Setup](#7-jenkins-cicd-setup)
 8. [Post-Deployment Verification](#8-post-deployment-verification)
-9. [Troubleshooting FAQ](#9-troubleshooting-faq)
+9. [Live EC2 Deployment](#9-live-ec2-deployment)
+10. [Troubleshooting FAQ](#10-troubleshooting-faq)
 
 ---
 
@@ -647,7 +648,91 @@ echo "Results: $PASS passed, $FAIL failed"
 
 ---
 
-## 9. Troubleshooting FAQ
+## 9. Live EC2 Deployment
+
+NeuroSphere is deployed and running on AWS EC2. Below are the actual steps used.
+
+### 9.1 EC2 Instance Details
+
+| Attribute | Value |
+|-----------|-------|
+| **Instance Name** | `neurosphere-server` |
+| **Instance ID** | `i-0b838d997334670f2` |
+| **Instance Type** | `t3.small` |
+| **Region** | `ap-south-1` (Mumbai) |
+| **OS** | Amazon Linux 2023 |
+| **Public IP** | `13.126.102.15` |
+
+### 9.2 EC2 Provisioning Steps
+
+```bash
+# Launch EC2 instance
+aws ec2 run-instances \
+  --image-id ami-0e35ddab05955cf57 \
+  --instance-type t3.small \
+  --key-name neurosphere-key \
+  --security-groups neurosphere-sg \
+  --region ap-south-1 \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=neurosphere-server}]'
+
+# Configure security group to allow all service ports
+aws ec2 authorize-security-group-ingress \
+  --group-name neurosphere-sg \
+  --protocol tcp \
+  --port 3000-9090 \
+  --cidr 0.0.0.0/0 \
+  --region ap-south-1
+```
+
+### 9.3 Deploy to EC2
+
+```bash
+# SSH into the instance
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15
+
+# Install Docker and Docker Compose
+sudo yum update -y
+sudo yum install -y docker git
+sudo systemctl enable docker && sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+
+# Install Docker Compose plugin
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# Transfer project files (from local machine)
+scp -i neurosphere-key.pem -r ./NeuroSphere ec2-user@13.126.102.15:~/
+
+# Build and launch all services
+cd ~/NeuroSphere
+docker compose up --build -d
+```
+
+### 9.4 Live Verification
+
+```bash
+# Verify all 9 containers are running
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+
+# Test live endpoints from anywhere
+curl -s http://13.126.102.15:5050/api/robots/status | jq '.fleet_size'
+curl -s http://13.126.102.15:5001/api/patients/dashboard | jq '.total_patients'
+curl -s http://13.126.102.15:3000/api/diagnostics/stats | jq '.accuracy_rate'
+curl -s http://13.126.102.15:5002/api/telemetry/stats | jq '.events_per_second'
+curl -s http://13.126.102.15:8080/health | jq .
+
+# Access monitoring
+# Grafana:    http://13.126.102.15:3001  (admin/neurosphere)
+# Prometheus: http://13.126.102.15:9090
+# Jenkins:    http://13.126.102.15:8081
+# Dashboard:  http://13.126.102.15:3333
+```
+
+---
+
+## 10. Troubleshooting FAQ
 
 ### Service Won't Start
 

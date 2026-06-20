@@ -5,6 +5,26 @@
 
 ---
 
+## 🌐 Live Demo — Try It Now!
+
+> **NeuroSphere is deployed and running live on AWS EC2.** Click any link below to see the platform in action.
+
+| Service | Live URL | Credentials |
+|---------|----------|-------------|
+| 🖥️ **Dashboard** | [http://13.126.102.15:3333](http://13.126.102.15:3333) | — |
+| 📊 **Grafana** | [http://13.126.102.15:3001](http://13.126.102.15:3001) | `admin` / `neurosphere` |
+| 🔧 **Jenkins CI/CD** | [http://13.126.102.15:8081](http://13.126.102.15:8081) | — |
+| 📈 **Prometheus** | [http://13.126.102.15:9090](http://13.126.102.15:9090) | — |
+| 🤖 **Robot Fleet API** | [http://13.126.102.15:5050/api/robots/status](http://13.126.102.15:5050/api/robots/status) | — |
+| 💓 **Patient Dashboard API** | [http://13.126.102.15:5001/api/patients/dashboard](http://13.126.102.15:5001/api/patients/dashboard) | — |
+| 🔬 **Diagnostics Stats API** | [http://13.126.102.15:3000/api/diagnostics/stats](http://13.126.102.15:3000/api/diagnostics/stats) | — |
+| 📡 **Telemetry Stats API** | [http://13.126.102.15:5002/api/telemetry/stats](http://13.126.102.15:5002/api/telemetry/stats) | — |
+| 🌐 **API Gateway** | [http://13.126.102.15:8080](http://13.126.102.15:8080) | — |
+
+**EC2 Instance:** `neurosphere-server` (`i-0b838d997334670f2`) · `t3.small` · `ap-south-1` (Mumbai) · Amazon Linux 2023 · **9 containers running**
+
+---
+
 ## 🎯 Opening Hook (30 seconds)
 
 > *"Imagine a platform where 10 surgical robots operate simultaneously across Massachusetts General, Mayo Clinic, and Johns Hopkins — each monitored in real-time by AI, secured to HIPAA standards, deployed through automated CI/CD pipelines, and backed by chaos-tested disaster recovery."*

@@ -13,6 +13,7 @@
 5. [Performance Tuning](#5-performance-tuning)
 6. [Troubleshooting Guide](#6-troubleshooting-guide)
 7. [Maintenance Procedures](#7-maintenance-procedures)
+8. [EC2 Live Instance Operations](#8-ec2-live-instance-operations)
 
 ---
 
@@ -731,3 +732,100 @@ curl 'http://localhost:9090/api/v1/query_range?query=container_memory_usage_byte
 *For architecture details, see [Architecture Guide](architecture.md).*
 *For deployment instructions, see [Deployment Guide](deployment-guide.md).*
 *For API documentation, see [API Reference](api-reference.md).*
+
+---
+
+## 8. EC2 Live Instance Operations
+
+### 8.1 Instance Details
+
+| Attribute | Value |
+|-----------|-------|
+| **Instance Name** | `neurosphere-server` |
+| **Instance ID** | `i-0b838d997334670f2` |
+| **Instance Type** | `t3.small` |
+| **Region** | `ap-south-1` (Mumbai) |
+| **OS** | Amazon Linux 2023 |
+| **Public IP** | `13.126.102.15` |
+| **Containers** | 9 running |
+
+### 8.2 SSH Access
+
+```bash
+# SSH into the EC2 instance
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15
+
+# Check running containers
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'docker ps'
+
+# View all container logs
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'docker compose logs --tail=50'
+
+# Restart all services
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'cd ~/NeuroSphere && docker compose restart'
+
+# Restart a specific service
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'cd ~/NeuroSphere && docker compose restart robot-command-service'
+```
+
+### 8.3 Live Health Checks
+
+```bash
+# Quick health check from your local machine
+for endpoint in \
+  "http://13.126.102.15:5050/health" \
+  "http://13.126.102.15:3000/health" \
+  "http://13.126.102.15:5001/health" \
+  "http://13.126.102.15:5002/health" \
+  "http://13.126.102.15:8080/health"; do
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$endpoint" 2>/dev/null)
+  echo "$endpoint → HTTP $STATUS"
+done
+
+# Full service verification
+curl -s http://13.126.102.15:5050/api/robots/status | jq '.fleet_size, .active_procedures'
+curl -s http://13.126.102.15:5001/api/patients/dashboard | jq '.total_patients, .critical_alerts'
+curl -s http://13.126.102.15:3000/api/diagnostics/stats | jq '.accuracy_rate'
+curl -s http://13.126.102.15:5002/api/telemetry/stats | jq '.events_per_second'
+```
+
+### 8.4 EC2 Troubleshooting
+
+```bash
+# Check instance status via AWS CLI
+aws ec2 describe-instance-status \
+  --instance-ids i-0b838d997334670f2 \
+  --region ap-south-1 | jq '.InstanceStatuses[0].InstanceState'
+
+# Check Docker disk usage on EC2
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'docker system df'
+
+# Rebuild and redeploy (after pushing code changes)
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'cd ~/NeuroSphere && git pull && docker compose up --build -d'
+
+# View container resource usage
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'docker stats --no-stream'
+
+# Check EC2 instance system resources
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'free -h && df -h'
+
+# Emergency: Stop all containers
+ssh -i neurosphere-key.pem ec2-user@13.126.102.15 'cd ~/NeuroSphere && docker compose down'
+
+# Emergency: Reboot instance
+aws ec2 reboot-instances --instance-ids i-0b838d997334670f2 --region ap-south-1
+```
+
+### 8.5 Live Monitoring URLs
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Dashboard | http://13.126.102.15:3333 | Main NeuroSphere dashboard |
+| Grafana | http://13.126.102.15:3001 | Login: `admin` / `neurosphere` |
+| Jenkins | http://13.126.102.15:8081 | CI/CD pipeline console |
+| Prometheus | http://13.126.102.15:9090 | Metrics & alerting |
+| Robot API | http://13.126.102.15:5050/api/robots/status | Surgical robot fleet |
+| Patient API | http://13.126.102.15:5001/api/patients/dashboard | Patient monitoring |
+| Diagnostics API | http://13.126.102.15:3000/api/diagnostics/stats | AI diagnostics |
+| Telemetry API | http://13.126.102.15:5002/api/telemetry/stats | IoT telemetry |
+| Gateway | http://13.126.102.15:8080/health | API gateway |
