@@ -1,0 +1,246 @@
+# =============================================================================
+# NeuroSphere — Production Overlay
+# =============================================================================
+# Hardened configuration for production deployment:
+#   - Higher replica counts for availability
+#   - Production resource allocations
+#   - Node affinity to production node pools
+#   - Pod anti-affinity for fault tolerance
+#   - Production-specific labels and annotations
+#
+# Usage:
+#   kubectl apply -k kubernetes/overlays/prod/
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Inherit all resources from the base configuration
+resources:
+  - ../../
+
+# ---------------------------------------------------------------------------
+# Production labels
+# ---------------------------------------------------------------------------
+commonLabels:
+  environment: production
+  tier: production
+  compliance: hipaa
+
+# ---------------------------------------------------------------------------
+# Production annotations
+# ---------------------------------------------------------------------------
+commonAnnotations:
+  neurosphere.io/environment: production
+  neurosphere.io/compliance: hipaa-phi-enabled
+
+# ---------------------------------------------------------------------------
+# Production patches — increased replicas, resources, and node affinity
+# ---------------------------------------------------------------------------
+patches:
+  # --- robot-command-service: 3 replicas, production resources, node affinity ---
+  - target:
+      kind: Deployment
+      name: robot-command-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: robot-command-service
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: robot-command-service
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 256Mi
+                  limits:
+                    cpu: "1"
+                    memory: 512Mi
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node-pool
+                          operator: In
+                          values:
+                            - production
+                        - key: workload-type
+                          operator: In
+                          values:
+                            - compute
+              podAntiAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      labelSelector:
+                        matchLabels:
+                          app: robot-command-service
+                      topologyKey: kubernetes.io/hostname
+
+  # --- diagnostic-engine-service: 3 replicas, higher resources for AI ---
+  - target:
+      kind: Deployment
+      name: diagnostic-engine-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: diagnostic-engine-service
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: diagnostic-engine-service
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: "1Gi"
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node-pool
+                          operator: In
+                          values:
+                            - production
+                        - key: workload-type
+                          operator: In
+                          values:
+                            - compute
+              podAntiAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      labelSelector:
+                        matchLabels:
+                          app: diagnostic-engine-service
+                      topologyKey: kubernetes.io/hostname
+
+  # --- patient-monitor-service: 4 replicas, critical service ---
+  - target:
+      kind: Deployment
+      name: patient-monitor-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: patient-monitor-service
+      spec:
+        replicas: 4
+        template:
+          metadata:
+            annotations:
+              neurosphere.io/criticality: life-safety
+          spec:
+            # Higher priority for patient monitoring workloads
+            priorityClassName: system-cluster-critical
+            containers:
+              - name: patient-monitor-service
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 256Mi
+                  limits:
+                    cpu: "1"
+                    memory: 512Mi
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node-pool
+                          operator: In
+                          values:
+                            - production
+                        - key: workload-type
+                          operator: In
+                          values:
+                            - critical
+              podAntiAffinity:
+                # Hard anti-affinity for patient monitor — never co-locate
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: patient-monitor-service
+                    topologyKey: kubernetes.io/hostname
+
+  # --- telemetry-ingest-service: 3 replicas, production resources ---
+  - target:
+      kind: Deployment
+      name: telemetry-ingest-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: telemetry-ingest-service
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: telemetry-ingest-service
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node-pool
+                          operator: In
+                          values:
+                            - production
+
+  # --- gateway-service: 2 replicas ---
+  - target:
+      kind: Deployment
+      name: gateway-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: gateway-service
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: gateway-service
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    cpu: 500m
+                    memory: 256Mi
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node-pool
+                          operator: In
+                          values:
+                            - production
+              podAntiAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      labelSelector:
+                        matchLabels:
+                          app: gateway-service
+                      topologyKey: kubernetes.io/hostname

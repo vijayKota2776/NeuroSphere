@@ -1,0 +1,168 @@
+# ===========================================================================
+# NeuroSphere — Docker Security Bench Configuration
+#
+# Configuration for Docker Bench for Security (CIS Docker Benchmark)
+# Run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+#        docker/docker-bench-security
+# ===========================================================================
+
+# CIS Docker Benchmark v1.6.0 compliance checks
+---
+benchmark_version: "1.6.0"
+profile: "Level 2 - Server"
+
+# --------------------------------------------------------------------------
+# 1. Host Configuration
+# --------------------------------------------------------------------------
+host_configuration:
+  # 1.1 - Ensure a separate partition for containers
+  separate_partition: true
+  docker_data_dir: "/var/lib/docker"
+
+  # 1.2 - Ensure only trusted users in docker group
+  trusted_docker_users:
+    - "jenkins"
+    - "neurosphere"
+
+  # 1.3 - Audit Docker daemon
+  audit_docker_daemon: true
+  audit_rules:
+    - "-w /usr/bin/docker -k docker"
+    - "-w /var/lib/docker -k docker"
+    - "-w /etc/docker -k docker"
+    - "-w /usr/lib/systemd/system/docker.service -k docker"
+
+# --------------------------------------------------------------------------
+# 2. Docker Daemon Configuration
+# --------------------------------------------------------------------------
+daemon_configuration:
+  # 2.1 - Network traffic restricted between containers
+  icc: false
+
+  # 2.2 - Logging level
+  log_level: "info"
+
+  # 2.3 - Allow Docker to make changes to iptables
+  iptables: true
+
+  # 2.4 - Insecure registries (must be empty in production)
+  insecure_registries: []
+
+  # 2.5 - Use TLS for daemon socket
+  tls_enabled: true
+
+  # 2.6 - Default ulimits
+  default_ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+
+  # 2.7 - User namespace remapping
+  userns_remap: "default"
+
+  # 2.8 - Live restore
+  live_restore: true
+
+  # 2.9 - Content trust
+  content_trust: true
+
+# --------------------------------------------------------------------------
+# 3. Container Runtime Configuration
+# --------------------------------------------------------------------------
+container_runtime:
+  # 3.1 - Do not use privileged containers
+  privileged_containers: false
+
+  # 3.2 - Restrict container capabilities
+  drop_capabilities:
+    - "ALL"
+  add_capabilities:
+    # Vault requires IPC_LOCK for mlock
+    vault:
+      - "IPC_LOCK"
+
+  # 3.3 - No new privileges
+  no_new_privileges: true
+
+  # 3.4 - Read-only root filesystem
+  readonly_rootfs: true
+  exceptions:
+    - "vault"  # Needs writable data directory
+
+  # 3.5 - Resource limits (enforced per-container)
+  resource_limits:
+    enforce_memory_limits: true
+    enforce_cpu_limits: true
+
+  # 3.6 - Health checks required
+  healthcheck_required: true
+
+  # 3.7 - PID limits
+  pids_limit: 200
+
+# --------------------------------------------------------------------------
+# 4. Image Security
+# --------------------------------------------------------------------------
+image_security:
+  # 4.1 - Scan images on push
+  scan_on_push: true
+
+  # 4.2 - Use trusted base images only
+  trusted_base_images:
+    - "python:3.12-slim"
+    - "node:20-alpine"
+    - "nginx:1.25-alpine"
+    - "hashicorp/vault:1.15"
+    - "jenkins/jenkins:lts"
+
+  # 4.3 - No secrets in images
+  secret_scanning: true
+
+  # 4.4 - Multi-stage builds (reduce attack surface)
+  multi_stage_builds: true
+
+  # 4.5 - Non-root users
+  non_root_required: true
+  allowed_users:
+    - "neurosphere"
+    - "appuser"
+    - "telemetry"
+    - "diagnostic"
+    - "nginx"
+
+# --------------------------------------------------------------------------
+# 5. Network Configuration
+# --------------------------------------------------------------------------
+network_configuration:
+  # 5.1 - Use custom bridge networks
+  default_bridge: false
+  custom_networks:
+    - "neurosphere-network"
+    - "neurosphere-cicd"
+
+  # 5.2 - Restrict inter-container communication
+  restrict_icc: true
+
+# --------------------------------------------------------------------------
+# 6. Logging & Monitoring
+# --------------------------------------------------------------------------
+logging:
+  # 6.1 - Centralized logging
+  log_driver: "json-file"
+  log_opts:
+    max_size: "50m"
+    max_file: "5"
+
+  # 6.2 - Remote logging
+  remote_logging: true
+  remote_target: "logstash:5044"
+
+# --------------------------------------------------------------------------
+# Healthcare-Specific Requirements
+# --------------------------------------------------------------------------
+healthcare_compliance:
+  hipaa_mode: true
+  phi_container_isolation: true
+  audit_all_container_actions: true
+  encryption_at_rest: true
+  encryption_in_transit: true

@@ -1,0 +1,29 @@
+# ============================================================================
+# NeuroSphere — Logstash Configuration
+# Central Log Processing Pipeline for Medical Robotics Telemetry
+#
+# Logstash ingests logs from all NeuroSphere microservices, applies
+# healthcare-specific parsing (ECS-compliant), and routes to Elasticsearch.
+# ============================================================================
+
+http.host: 0.0.0.0
+http.port: 9600
+log.level: info
+
+# ---------------------------------------------------------------------------
+# Pipeline Tuning
+# Workers = 2 balances throughput with resource usage in dev/staging
+# Production: set workers to number of CPU cores
+# ---------------------------------------------------------------------------
+pipeline.workers: 2
+pipeline.batch.size: 125
+
+# Pipeline configuration directory
+path.config: /usr/share/logstash/pipeline
+
+# ---------------------------------------------------------------------------
+# Monitoring — Reports pipeline metrics to Elasticsearch
+# Enables visibility into log processing throughput, backpressure, etc.
+# ---------------------------------------------------------------------------
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.hosts: ["http://elasticsearch:9200"]

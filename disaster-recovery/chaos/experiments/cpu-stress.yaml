@@ -1,0 +1,120 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Experiment: CPU Stress
+# =============================================================================
+# Purpose:    Apply 80% CPU stress to diagnostic-engine pods for 5 minutes
+#             to validate that the Horizontal Pod Autoscaler (HPA) responds
+#             correctly, scaling the deployment from 2 to 4+ replicas.
+#
+# Risk Level: MEDIUM
+# Blast Radius: diagnostic-engine pods (CPU resources)
+# Expected Outcome:
+#   - CPU utilization on targeted pods reaches ~80%
+#   - HPA detects CPU threshold breach within 30 seconds
+#   - HPA scales diagnostic-engine from 2 → 4+ replicas within 2 minutes
+#   - New pods pass readiness checks and join the service endpoint
+#   - Diagnostic processing latency (p99) stays below 2000ms SLO
+#   - After stress ends, HPA cooldown scales back to 2 replicas (~5 min)
+#   - Alert fires: "DiagnosticEngineCPUHigh" within 60 seconds
+#
+# Architecture Context:
+#   diagnostic-engine: ML-based medical image analysis service
+#   - Baseline CPU: 20-40% during normal diagnostic processing
+#   - HPA target: 60% average CPU utilization
+#   - HPA min/max: 2/8 replicas
+#   - Processing: CT scans, MRI analysis, pathology slide interpretation
+#   - Each inference request consumes 200-500ms of CPU time
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - HPA configured on diagnostic-engine deployment
+#   - Cluster has sufficient node capacity for scale-up
+#   - Cluster autoscaler enabled (in case node-level scaling needed)
+#   - Steady-state validation passes
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: neurosphere-cpu-stress-diagnostics
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: resource-stress
+    chaos.neurosphere.io/risk-level: medium
+    chaos.neurosphere.io/blast-radius: service-pods
+    chaos.neurosphere.io/test-target: hpa-scaling
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Stresses diagnostic-engine pods to 80% CPU utilization to validate
+      HPA autoscaling behavior. The diagnostic engine processes medical
+      images (CT, MRI, pathology) and must scale under load to maintain
+      processing time SLOs.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/cpu-stress
+    chaos.neurosphere.io/jira: NEURO-CHAOS-004
+    chaos.neurosphere.io/safety-gate: standard
+    chaos.neurosphere.io/expected-alerts: >-
+      DiagnosticEngineCPUHigh, HPAScaleUpTriggered
+    chaos.neurosphere.io/hpa-expectation: >-
+      Replicas should scale from 2 to 4+ within 2 minutes of stress start.
+      Scale-down should occur 5-10 minutes after stress ends.
+spec:
+  mode: all
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      app: diagnostic-engine
+      project: neurosphere
+  stressors:
+    cpu:
+      # Number of CPU stress worker threads.
+      # Set to match the pod's CPU request (2 cores) to achieve ~80% utilization.
+      workers: 2
+      # Load percentage per worker. 80% of 2 workers = 1.6 cores effective load.
+      load: 80
+  duration: '5m'
+  # Container-level targeting: stress only the main application container,
+  # not sidecars (vault-agent, envoy-proxy, fluentd).
+  containerNames:
+    - diagnostic-engine
+
+---
+# =============================================================================
+# HPA Scaling Observation: Metrics to monitor during this experiment
+# =============================================================================
+# While this experiment runs, the following Prometheus queries should be
+# monitored to validate correct HPA behavior:
+#
+# 1. CPU Utilization (should reach ~80%):
+#    rate(container_cpu_usage_seconds_total{
+#      namespace="neurosphere-core",
+#      pod=~"diagnostic-engine-.*",
+#      container="diagnostic-engine"
+#    }[1m])
+#
+# 2. HPA Desired Replicas (should increase to 4+):
+#    kube_horizontalpodautoscaler_status_desired_replicas{
+#      namespace="neurosphere-core",
+#      horizontalpodautoscaler="diagnostic-engine"
+#    }
+#
+# 3. HPA Current Replicas (should follow desired within 2 min):
+#    kube_horizontalpodautoscaler_status_current_replicas{
+#      namespace="neurosphere-core",
+#      horizontalpodautoscaler="diagnostic-engine"
+#    }
+#
+# 4. Diagnostic Processing Latency (should stay below 2000ms p99):
+#    histogram_quantile(0.99,
+#      rate(neurosphere_diagnostic_processing_duration_seconds_bucket{
+#        namespace="neurosphere-core"
+#      }[5m])
+#    )
+#
+# 5. Ready Pods (should increase as HPA scales):
+#    kube_deployment_status_replicas_ready{
+#      namespace="neurosphere-core",
+#      deployment="diagnostic-engine"
+#    }
+# =============================================================================

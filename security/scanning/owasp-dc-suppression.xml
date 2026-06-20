@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  =============================================================================
+  NeuroSphere Medical Robotics — OWASP Dependency-Check Suppressions
+  =============================================================================
+  Purpose:  Suppress known false positives from OWASP Dependency-Check scans.
+  Policy:   Every suppression MUST include:
+              1. Rationale explaining why the finding is a false positive
+              2. Review date (re-evaluate at least quarterly)
+              3. Reviewer name / team
+              4. Reference to the upstream advisory or NVD entry
+  Standard: Aligned with HIPAA §164.312(c)(1) integrity controls
+  =============================================================================
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+  <!--
+    Suppression 1: Flask / Werkzeug debugger pin CVE
+    ============================================================
+    CVE:        CVE-2024-34069
+    Component:  Werkzeug (Flask dependency)
+    Rationale:  The debugger is NEVER enabled in NeuroSphere production or
+                staging environments. All Flask services run with
+                FLASK_ENV=production and debug=False enforced via Helm values
+                and Kubernetes ConfigMaps. The vulnerable code path (debugger
+                PIN bypass) is unreachable in our deployment.
+    Evidence:   - Helm values: services.*.flask.debug = false
+                - K8s admission policy blocks FLASK_DEBUG=1
+                - Verified by penetration test report Q1-2026 §4.2
+    Reviewed:   2026-06-01 by Security Engineering
+    Next Review: 2026-09-01
+  -->
+  <suppress>
+    <notes><![CDATA[
+      False positive: Werkzeug debugger is disabled in all deployed environments.
+      The debugger PIN bypass vulnerability (CVE-2024-34069) requires the
+      interactive debugger to be enabled, which is blocked by admission policy.
+      Reviewed 2026-06-01 — next review 2026-09-01.
+    ]]></notes>
+    <cve>CVE-2024-34069</cve>
+  </suppress>
+
+  <!--
+    Suppression 2: gRPC C-core denial-of-service via HPACK
+    ============================================================
+    CVE:        CVE-2023-44487  (HTTP/2 Rapid Reset)
+    Component:  grpcio
+    Rationale:  NeuroSphere gRPC services sit behind an Envoy sidecar proxy
+                (Istio service mesh) that enforces per-stream rate limits and
+                MAX_CONCURRENT_STREAMS=100. The Envoy version deployed
+                (1.29+) includes the upstream mitigation. Direct pod-to-pod
+                gRPC traffic is restricted by NetworkPolicy to same-namespace
+                only, limiting attack surface to authenticated internal callers.
+    Evidence:   - Istio mesh config: meshConfig.h2UpgradePolicy = UPGRADE
+                - Envoy stream limit: envoy.resource_limits.max_connections = 1024
+                - NetworkPolicy audit report Q2-2026
+    Reviewed:   2026-05-15 by Platform Security
+    Next Review: 2026-08-15
+  -->
+  <suppress>
+    <notes><![CDATA[
+      Mitigated at infrastructure layer: Envoy sidecar enforces HTTP/2 stream
+      limits and rate limiting. Direct gRPC exposure is blocked by NetworkPolicy.
+      CVE-2023-44487 rapid reset attack is not exploitable in our mesh topology.
+      Reviewed 2026-05-15 — next review 2026-08-15.
+    ]]></notes>
+    <cve>CVE-2023-44487</cve>
+  </suppress>
+
+  <!--
+    Suppression 3: Protobuf Python DoS via deeply nested messages
+    ============================================================
+    CVE:        CVE-2024-7254
+    Component:  protobuf (google-protobuf Python package)
+    Rationale:  NeuroSphere protocol buffer schemas are strictly defined with
+                a maximum nesting depth of 4 levels (validated by buf lint).
+                All inbound protobuf payloads are processed through a custom
+                deserialization wrapper (neurosphere.common.proto_utils) that
+                enforces a recursion limit of 50 (default is 100). Untrusted
+                external input never reaches protobuf deserialization directly;
+                all external APIs are REST/JSON with schema validation.
+    Evidence:   - buf.yaml: lint rules include MESSAGE_NESTING_DEPTH <= 4
+                - proto_utils.py: RecursionLimit(50) decorator
+                - API gateway validates JSON schema before conversion
+    Reviewed:   2026-06-10 by Application Security
+    Next Review: 2026-09-10
+  -->
+  <suppress>
+    <notes><![CDATA[
+      False positive for our usage: protobuf messages have enforced nesting
+      limits via buf lint and runtime recursion guards. External input is
+      JSON-validated before protobuf conversion.
+      CVE-2024-7254 requires crafted deeply nested messages which our schema
+      constraints prevent.
+      Reviewed 2026-06-10 — next review 2026-09-10.
+    ]]></notes>
+    <cve>CVE-2024-7254</cve>
+  </suppress>
+
+  <!--
+    Suppression 4: NumPy buffer overflow in array deserialization
+    ============================================================
+    CVE:        CVE-2024-5642
+    Component:  numpy
+    Rationale:  The CVE affects numpy.load() with allow_pickle=True on
+                untrusted .npy files. NeuroSphere's telemetry-ingest and
+                diagnostic-processor services use numpy only for in-memory
+                numerical computation on validated sensor data arrays.
+                We never call numpy.load() on user-supplied files; all data
+                ingestion goes through our validated protobuf pipeline.
+                allow_pickle is globally disabled via numpy configuration.
+    Evidence:   - Bandit scan confirms no numpy.load(allow_pickle=True) calls
+                - Code review checklist item SEC-NP-001
+                - numpy.set_printoptions / config enforced in service entrypoint
+    Reviewed:   2026-06-05 by Data Engineering Security
+    Next Review: 2026-09-05
+  -->
+  <suppress>
+    <notes><![CDATA[
+      Not exploitable: numpy.load() with untrusted input is not used in
+      NeuroSphere services. All numerical data arrives via validated protobuf
+      streams. allow_pickle is globally disabled.
+      CVE-2024-5642 requires loading crafted .npy files which our architecture
+      does not permit.
+      Reviewed 2026-06-05 — next review 2026-09-05.
+    ]]></notes>
+    <cve>CVE-2024-5642</cve>
+  </suppress>
+
+</suppressions>

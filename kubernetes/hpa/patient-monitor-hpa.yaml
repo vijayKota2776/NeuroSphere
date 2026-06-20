@@ -1,0 +1,61 @@
+# =============================================================================
+# HorizontalPodAutoscaler: patient-monitor-service
+# =============================================================================
+# CRITICAL SERVICE — aggressive scaling configuration for patient safety.
+#   - Higher minReplicas (3) ensures baseline capacity for vitals monitoring
+#   - Higher maxReplicas (12) allows rapid scale-out during mass-casualty events
+#   - Fast scale-up (3 pods per 30s) prioritizes patient safety over cost
+#   - Slow scale-down (600s window) retains capacity to prevent monitoring gaps
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: patient-monitor-hpa
+  namespace: neurosphere-core
+  labels:
+    app: patient-monitor-service
+    component: autoscaling
+    part-of: neurosphere
+    criticality: high
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: patient-monitor-service
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    # CPU target 65% — moderate headroom for real-time vitals processing
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+    # Memory target 75% — patient session data and vitals buffers consume memory
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      # No stabilization delay — scale immediately for patient safety
+      stabilizationWindowSeconds: 0
+      policies:
+        # Fast scale-up: 3 pods every 30 seconds
+        # Prioritizes availability over cost during patient load surges
+        - type: Pods
+          value: 3
+          periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      # 600s (10 min) stabilization — very conservative scale-down to
+      # prevent monitoring interruptions during fluctuating patient loads
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+      selectPolicy: Min

@@ -1,0 +1,362 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Engineering Safety Rules
+# =============================================================================
+# CRITICAL: These safety guardrails protect patient safety during chaos
+# testing. Every chaos experiment MUST comply with these rules.
+#
+# In a medical robotics environment, chaos engineering carries significantly
+# higher stakes than typical software systems. An uncontrolled experiment
+# could compromise:
+#   - Active surgical procedures (robotic-assisted surgery)
+#   - Real-time patient vital sign monitoring
+#   - Medical device telemetry and control loops
+#   - HIPAA-protected patient data pipelines
+#
+# These rules are enforced at multiple layers:
+#   1. Chaos Mesh RBAC (who can run experiments)
+#   2. Admission webhooks (what experiments are allowed)
+#   3. Runtime safety checks (when experiments can run)
+#   4. Automatic abort conditions (what triggers emergency stop)
+# =============================================================================
+
+# =============================================================================
+# Rule 1: NEVER target patient-monitor during active patient alerts
+# =============================================================================
+# The patient-monitor service provides real-time vital sign monitoring.
+# Disrupting it during active alerts could delay critical care responses.
+#
+# Enforcement: Label-based selector exclusion + admission webhook
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Schedule
+metadata:
+  name: safety-rule-patient-monitor-protection
+  namespace: neurosphere-core
+  labels:
+    chaos.neurosphere.io/safety-rule: patient-monitor-protection
+    chaos.neurosphere.io/rule-id: SR-001
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Blocks chaos experiments from targeting patient-monitor pods when
+      active patient alerts are present. The admission webhook checks
+      the alert status before allowing experiment creation.
+    chaos.neurosphere.io/severity: critical
+    chaos.neurosphere.io/regulation: "FDA 21 CFR Part 820, IEC 62304"
+spec:
+  schedule: '@every 30s'
+  type: StatusCheck
+  statusCheck:
+    type: HTTP
+    mode: Continuous
+    http:
+      url: http://patient-monitor.neurosphere-core.svc:8080/api/v1/alerts/active
+      method: GET
+      criteria:
+        statusCode: "200"
+    intervalSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 1
+    successThreshold: 1
+
+---
+# =============================================================================
+# Rule 2: NEVER run chaos during active surgical procedures
+# =============================================================================
+# Active surgical procedures involve real-time robotic control loops
+# with sub-100ms latency requirements. Any chaos injection could
+# compromise surgical precision and patient safety.
+#
+# Enforcement: Pre-experiment webhook + continuous monitoring
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StatusCheck
+metadata:
+  name: safety-rule-surgical-procedure-gate
+  namespace: neurosphere-core
+  labels:
+    chaos.neurosphere.io/safety-rule: surgical-procedure-gate
+    chaos.neurosphere.io/rule-id: SR-002
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Continuous check for active surgical procedures. When active
+      procedures are detected, all chaos experiments must be paused
+      or prevented from starting.
+    chaos.neurosphere.io/severity: critical
+    chaos.neurosphere.io/regulation: "FDA 21 CFR Part 820, IEC 80601-2-77"
+spec:
+  type: HTTP
+  mode: Continuous
+  http:
+    url: http://robot-command-service.neurosphere-core.svc:8080/api/v1/procedures/active
+    method: GET
+    criteria:
+      statusCode: "200"
+  intervalSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 1
+  successThreshold: 1
+  recordsHistoryLimit: 100
+
+---
+# =============================================================================
+# Rule 3: Maximum 1 experiment at a time
+# =============================================================================
+# To limit blast radius and ensure clear causality, only one chaos
+# experiment may be active at any given time. The admission webhook
+# checks for existing active experiments before allowing new ones.
+#
+# Enforcement: Admission webhook + Chaos Mesh concurrency limit
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chaos-safety-config
+  namespace: neurosphere-core
+  labels:
+    chaos.neurosphere.io/safety-rule: concurrency-limit
+    chaos.neurosphere.io/rule-id: SR-003
+data:
+  safety-config.yaml: |
+    # -----------------------------------------------------------------------
+    # Chaos Engineering Safety Configuration
+    # -----------------------------------------------------------------------
+
+    # Rule 3: Maximum concurrent experiments
+    concurrency:
+      max_concurrent_experiments: 1
+      queue_overflow_action: reject   # reject | queue
+      queue_max_size: 5
+
+    # Rule 4: Auto-abort conditions
+    abort_conditions:
+      # P0 services that trigger auto-abort if they go down
+      p0_services:
+        - name: patient-monitor
+          namespace: neurosphere-core
+          health_endpoint: /health
+          port: 8080
+          max_downtime_seconds: 30
+        - name: robot-command-service
+          namespace: neurosphere-core
+          health_endpoint: /health
+          port: 8080
+          max_downtime_seconds: 15
+      # Prometheus alert rules that trigger auto-abort
+      critical_alerts:
+        - PatientMonitorDown
+        - RobotCommandServiceDown
+        - SurgicalProcedureInterrupted
+        - PatientDataPipelineDown
+        - HIPAAComplianceViolation
+      # Error rate threshold (auto-abort if exceeded)
+      max_error_rate_percent: 5.0
+      error_rate_window_seconds: 60
+
+    # Rule 5: Production approval requirement
+    production_approval:
+      required: true
+      approvers:
+        - role: platform-sre-lead
+          min_approvals: 1
+        - role: clinical-engineering-lead
+          min_approvals: 1
+      approval_ttl_hours: 4
+      # Approval channel
+      notification_channel: "#neurosphere-chaos-approvals"
+
+    # Rule 6: Maintenance window blocking
+    maintenance_windows:
+      block_chaos_during_maintenance: true
+      maintenance_calendar_url: "https://calendar.neurosphere.io/maintenance"
+      # Static blocked windows (UTC)
+      static_blocked_windows:
+        - name: "Weekly Maintenance"
+          cron: "0 2 * * 0"        # Sundays 2:00 AM UTC
+          duration_hours: 4
+        - name: "Monthly Patching"
+          cron: "0 0 1 * *"        # 1st of month, midnight UTC
+          duration_hours: 6
+        - name: "Quarterly DR Test"
+          cron: "0 6 15 1,4,7,10 *"  # Quarterly on 15th
+          duration_hours: 8
+
+    # Rule 7: Maximum experiment duration
+    time_limits:
+      max_experiment_duration_minutes: 10
+      max_workflow_duration_minutes: 60
+      enforce_hard_deadline: true
+      # Grace period after max duration before force-kill
+      grace_period_seconds: 30
+
+    # Healthcare-specific safety rules
+    healthcare_safety:
+      # Never chaos test during peak clinical hours (7 AM - 7 PM local)
+      restricted_hours:
+        timezone: "America/New_York"
+        blocked_ranges:
+          - start: "07:00"
+            end: "19:00"
+            days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+            reason: "Peak clinical hours"
+          - start: "07:00"
+            end: "13:00"
+            days: ["Saturday"]
+            reason: "Saturday morning clinic hours"
+
+      # Services that must NEVER be fully disrupted
+      protected_services:
+        - name: patient-monitor
+          protection_level: absolute    # Never fully disrupt
+          allowed_experiments:
+            - pod-kill-single           # Kill 1 of 3+ pods
+            - network-latency-moderate  # Up to 100ms latency
+          forbidden_experiments:
+            - pod-kill-all
+            - network-partition
+            - dns-failure
+        - name: robot-command-service
+          protection_level: conditional  # Only when no active procedures
+          condition_check: "/api/v1/procedures/active"
+          allowed_experiments:
+            - pod-kill-single
+            - network-latency-moderate
+            - cpu-stress-moderate
+          forbidden_experiments:
+            - pod-kill-all
+            - network-partition
+
+      # Chaos experiments exempt labels
+      # Pods with these labels are never targeted
+      exempt_labels:
+        - key: "neurosphere.io/chaos-exempt"
+          value: "true"
+        - key: "neurosphere.io/active-procedure"
+          value: "true"
+        - key: "neurosphere.io/patient-critical"
+          value: "true"
+
+---
+# =============================================================================
+# RBAC: Chaos Engineering Roles
+# =============================================================================
+# Restrict who can create, modify, and delete chaos experiments.
+# Only SRE team members with explicit chaos-engineering role binding
+# can execute experiments.
+# =============================================================================
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: neurosphere-chaos-engineer
+  labels:
+    chaos.neurosphere.io/safety-rule: rbac
+    chaos.neurosphere.io/rule-id: SR-005
+rules:
+  # Full access to Chaos Mesh resources
+  - apiGroups: ["chaos-mesh.org"]
+    resources:
+      - podchaos
+      - networkchaos
+      - stresschaos
+      - dnschaos
+      - iochaos
+      - httpchaos
+      - physicalmachinechaos
+      - workflows
+      - schedules
+      - statuschecks
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: neurosphere-chaos-viewer
+  labels:
+    chaos.neurosphere.io/safety-rule: rbac
+    chaos.neurosphere.io/rule-id: SR-005
+rules:
+  # Read-only access to Chaos Mesh resources
+  - apiGroups: ["chaos-mesh.org"]
+    resources:
+      - podchaos
+      - networkchaos
+      - stresschaos
+      - dnschaos
+      - iochaos
+      - httpchaos
+      - physicalmachinechaos
+      - workflows
+      - schedules
+      - statuschecks
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: neurosphere-chaos-engineers-binding
+  namespace: neurosphere-core
+  labels:
+    chaos.neurosphere.io/safety-rule: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: neurosphere-chaos-engineer
+subjects:
+  - kind: Group
+    name: neurosphere-sre-team
+    apiGroup: rbac.authorization.k8s.io
+
+---
+# =============================================================================
+# Admission Webhook: Chaos Experiment Validator
+# =============================================================================
+# ValidatingWebhookConfiguration that intercepts chaos experiment
+# creation and enforces safety rules before the experiment is admitted.
+# =============================================================================
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: neurosphere-chaos-safety-webhook
+  labels:
+    chaos.neurosphere.io/safety-rule: admission-control
+    chaos.neurosphere.io/rule-id: SR-ALL
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Admission webhook that validates all chaos experiments against
+      safety rules before allowing them to be created. Checks for
+      active procedures, maintenance windows, concurrent experiments,
+      protected services, and restricted hours.
+webhooks:
+  - name: chaos-safety.neurosphere.io
+    clientConfig:
+      service:
+        name: chaos-safety-webhook
+        namespace: neurosphere-core
+        path: /validate-chaos
+      caBundle: ""  # Populated by cert-manager
+    rules:
+      - apiGroups: ["chaos-mesh.org"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          - podchaos
+          - networkchaos
+          - stresschaos
+          - dnschaos
+          - iochaos
+          - httpchaos
+          - physicalmachinechaos
+          - workflows
+          - schedules
+    failurePolicy: Fail  # If webhook is down, DENY all chaos experiments
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    namespaceSelector:
+      matchLabels:
+        chaos.neurosphere.io/enabled: "true"

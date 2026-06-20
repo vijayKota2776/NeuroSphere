@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroSphere — Medical Robotics Command Center</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-card: #1a2035;
+            --bg-card-hover: #1f2847;
+            --border: #2a3555;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-blue: #3b82f6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-amber: #f59e0b;
+            --accent-purple: #8b5cf6;
+            --accent-pink: #ec4899;
+            --glow-blue: rgba(59, 130, 246, 0.15);
+            --glow-green: rgba(16, 185, 129, 0.15);
+            --glow-red: rgba(239, 68, 68, 0.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Animated background grid */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: 
+                linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Top Navigation */
+        .navbar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 64px;
+            background: rgba(10, 14, 26, 0.85);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            z-index: 1000;
+        }
+
+        .navbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .navbar-logo {
+            width: 36px; height: 36px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px;
+            animation: pulse-glow 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 15px rgba(59, 130, 246, 0.3); }
+            50% { box-shadow: 0 0 30px rgba(59, 130, 246, 0.6); }
+        }
+
+        .navbar-title {
+            font-size: 18px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff, var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .navbar-subtitle {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+
+        .navbar-status {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-badge.online {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: blink 2s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .live-time {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Navigation Tabs */
+        .nav-tabs {
+            position: fixed;
+            top: 64px; left: 0; right: 0;
+            height: 48px;
+            background: rgba(17, 24, 39, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            gap: 4px;
+            z-index: 999;
+        }
+
+        .nav-tab {
+            padding: 8px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            background: none;
+        }
+
+        .nav-tab:hover {
+            color: var(--text-primary);
+            background: rgba(255,255,255,0.05);
+        }
+
+        .nav-tab.active {
+            color: var(--accent-blue);
+            background: var(--glow-blue);
+        }
+
+        /* Main Content */
+        .main-content {
+            margin-top: 112px;
+            padding: 24px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .page { display: none; }
+        .page.active { display: block; animation: fadeIn 0.3s ease; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Stats Row */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 20px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            border-radius: 14px 14px 0 0;
+        }
+
+        .stat-card.blue::before { background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan)); }
+        .stat-card.green::before { background: linear-gradient(90deg, var(--accent-green), #34d399); }
+        .stat-card.red::before { background: linear-gradient(90deg, var(--accent-red), var(--accent-pink)); }
+        .stat-card.amber::before { background: linear-gradient(90deg, var(--accent-amber), #fbbf24); }
+        .stat-card.purple::before { background: linear-gradient(90deg, var(--accent-purple), var(--accent-pink)); }
+        .stat-card.cyan::before { background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue)); }
+
+        .stat-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 800;
+            margin-bottom: 4px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-detail {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Cards Grid */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+
+        .card:hover {
+            border-color: rgba(59, 130, 246, 0.4);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .card-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-online { background: rgba(16,185,129,0.15); color: var(--accent-green); }
+        .badge-offline { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+        .badge-critical { background: rgba(239,68,68,0.2); color: var(--accent-red); border: 1px solid rgba(239,68,68,0.3); }
+        .badge-warning { background: rgba(245,158,11,0.15); color: var(--accent-amber); }
+        .badge-stable { background: rgba(16,185,129,0.15); color: var(--accent-green); }
+        .badge-calibrating { background: rgba(139,92,246,0.15); color: var(--accent-purple); }
+
+        .card-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 13px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .card-row:last-child { border: none; }
+        .card-row-label { color: var(--text-muted); }
+        .card-row-value { color: var(--text-primary); font-weight: 500; }
+
+        /* Alerts Feed */
+        .alerts-feed {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .alert-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 18px;
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            transition: all 0.2s;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .alert-item.critical {
+            border-left: 3px solid var(--accent-red);
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .alert-item.warning {
+            border-left: 3px solid var(--accent-amber);
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .alert-icon {
+            font-size: 20px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .alert-content { flex: 1; }
+
+        .alert-message {
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 1.5;
+            margin-bottom: 4px;
+        }
+
+        .alert-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            gap: 12px;
+        }
+
+        /* Section Title */
+        .section-title {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Services Table */
+        .services-table {
+            width: 100%;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        .services-table th,
+        .services-table td {
+            padding: 12px 18px;
+            text-align: left;
+            font-size: 13px;
+        }
+
+        .services-table th {
+            background: rgba(255,255,255,0.03);
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+
+        .services-table tr:not(:last-child) td {
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .services-table tr:hover td {
+            background: rgba(255,255,255,0.02);
+        }
+
+        .health-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+
+        .health-dot.healthy { background: var(--accent-green); box-shadow: 0 0 8px rgba(16,185,129,0.5); }
+        .health-dot.unhealthy { background: var(--accent-red); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+
+        /* Battery bar */
+        .battery-bar {
+            width: 60px; height: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+
+        .battery-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s;
+        }
+
+        .battery-high { background: var(--accent-green); }
+        .battery-mid { background: var(--accent-amber); }
+        .battery-low { background: var(--accent-red); }
+
+        /* Vitals display */
+        .vitals-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .vital-item {
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            padding: 8px 12px;
+            text-align: center;
+        }
+
+        .vital-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .vital-value {
+            font-size: 18px;
+            font-weight: 700;
+            margin-top: 2px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Loading */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 60px;
+            color: var(--text-muted);
+            gap: 12px;
+        }
+
+        .spinner {
+            width: 24px; height: 24px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            .cards-grid { grid-template-columns: 1fr; }
+            .navbar-status { gap: 10px; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+<!-- Navigation Bar -->
+<nav class="navbar">
+    <div class="navbar-brand">
+        <div class="navbar-logo">🧠</div>
+        <div>
+            <div class="navbar-title">NeuroSphere</div>
+            <div class="navbar-subtitle">Medical Robotics Command Center</div>
+        </div>
+    </div>
+    <div class="navbar-status">
+        <div class="status-badge online">
+            <div class="status-dot"></div>
+            <span>System Online</span>
+        </div>
+        <div class="live-time" id="liveTime"></div>
+    </div>
+</nav>
+
+<!-- Tabs -->
+<div class="nav-tabs">
+    <button class="nav-tab active" onclick="switchTab('overview')">📊 Overview</button>
+    <button class="nav-tab" onclick="switchTab('robots')">🤖 Robot Fleet</button>
+    <button class="nav-tab" onclick="switchTab('patients')">💓 Patients</button>
+    <button class="nav-tab" onclick="switchTab('alerts')">🚨 Alerts</button>
+    <button class="nav-tab" onclick="switchTab('diagnostics')">🔬 Diagnostics</button>
+    <button class="nav-tab" onclick="switchTab('services')">⚙️ Services</button>
+</div>
+
+<!-- Main Content -->
+<div class="main-content">
+
+    <!-- OVERVIEW PAGE -->
+    <div class="page active" id="page-overview">
+        <div class="stats-row" id="overviewStats">
+            <div class="loading"><div class="spinner"></div> Loading dashboard...</div>
+        </div>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div>
+                <div class="section-title">🚨 Recent Critical Alerts</div>
+                <div class="alerts-feed" id="recentAlerts"></div>
+            </div>
+            <div>
+                <div class="section-title">🤖 Robot Fleet Status</div>
+                <div class="cards-grid" id="robotMiniCards" style="grid-template-columns: 1fr;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ROBOTS PAGE -->
+    <div class="page" id="page-robots">
+        <div class="stats-row" id="robotStats"></div>
+        <div class="section-title">🤖 Surgical Robot Fleet</div>
+        <div class="cards-grid" id="robotCards"></div>
+    </div>
+
+    <!-- PATIENTS PAGE -->
+    <div class="page" id="page-patients">
+        <div class="stats-row" id="patientStats"></div>
+        <div class="section-title">💓 Patient Vitals Monitor</div>
+        <div class="cards-grid" id="patientCards"></div>
+    </div>
+
+    <!-- ALERTS PAGE -->
+    <div class="page" id="page-alerts">
+        <div class="stats-row" id="alertStats"></div>
+        <div class="section-title">🚨 Live Clinical Alerts</div>
+        <div class="alerts-feed" id="alertsFeed"></div>
+    </div>
+
+    <!-- DIAGNOSTICS PAGE -->
+    <div class="page" id="page-diagnostics">
+        <div class="stats-row" id="diagStats"></div>
+        <div class="section-title">🔬 Diagnostic Jobs</div>
+        <div id="diagContent"></div>
+    </div>
+
+    <!-- SERVICES PAGE -->
+    <div class="page" id="page-services">
+        <div class="section-title">⚙️ Service Health Monitor</div>
+        <div id="servicesContent"></div>
+    </div>
+</div>
+
+<script>
+// ── API Configuration ──
+const HOST = window.location.hostname;
+const API = {
+    robots: `http://${HOST}:5050/api/robots/status`,
+    heartbeat: `http://${HOST}:5050/api/robots/heartbeat`,
+    patients: `http://${HOST}:5001/api/patients/vitals`,
+    dashboard: `http://${HOST}:5001/api/patients/dashboard`,
+    alerts: `http://${HOST}:5001/api/patients/alerts`,
+    diagQueue: `http://${HOST}:3000/api/diagnostics/queue`,
+    diagStats: `http://${HOST}:3000/api/diagnostics/stats`,
+    telemetry: `http://${HOST}:5002/api/telemetry/stats`,
+    healthRobot: `http://${HOST}:5050/health`,
+    healthPatient: `http://${HOST}:5001/health`,
+    healthDiag: `http://${HOST}:3000/health`,
+    healthTelemetry: `http://${HOST}:5002/health`,
+};
+
+// ── Helpers ──
+async function fetchJSON(url) {
+    try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(r.status);
+        return await r.json();
+    } catch (e) {
+        console.warn('Fetch failed:', url, e.message);
+        return null;
+    }
+}
+
+function batteryHTML(level) {
+    const cls = level > 70 ? 'battery-high' : level > 40 ? 'battery-mid' : 'battery-low';
+    return `<div class="battery-bar"><div class="battery-fill ${cls}" style="width:${level}%"></div></div>${level.toFixed(0)}%`;
+}
+
+function timeSince(ts) {
+    const secs = Math.floor(Date.now()/1000 - ts);
+    if (secs < 60) return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+    return `${Math.floor(secs/3600)}h ago`;
+}
+
+function statusBadge(status) {
+    const map = { online: 'badge-online', offline: 'badge-offline', calibrating: 'badge-calibrating', maintenance: 'badge-warning' };
+    return `<span class="card-badge ${map[status] || 'badge-online'}">${status}</span>`;
+}
+
+// ── Tab Switching ──
+function switchTab(tab) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById(`page-${tab}`).classList.add('active');
+    event.target.classList.add('active');
+    loadPage(tab);
+}
+
+// ── Page Loaders ──
+async function loadPage(page) {
+    switch(page) {
+        case 'overview': await loadOverview(); break;
+        case 'robots': await loadRobots(); break;
+        case 'patients': await loadPatients(); break;
+        case 'alerts': await loadAlerts(); break;
+        case 'diagnostics': await loadDiagnostics(); break;
+        case 'services': await loadServices(); break;
+    }
+}
+
+async function loadOverview() {
+    const [dashboard, robots, alerts, diagStats, telemetry] = await Promise.all([
+        fetchJSON(API.dashboard), fetchJSON(API.robots), fetchJSON(API.alerts),
+        fetchJSON(API.diagStats), fetchJSON(API.telemetry)
+    ]);
+
+    const el = document.getElementById('overviewStats');
+    el.innerHTML = `
+        <div class="stat-card blue"><div class="stat-label">Robots Online</div>
+            <div class="stat-value">${robots ? robots.fleet_size : '—'}</div>
+            <div class="stat-detail">${robots ? robots.active_procedures : 0} active procedures</div></div>
+        <div class="stat-card green"><div class="stat-label">Patients Monitored</div>
+            <div class="stat-value">${dashboard ? dashboard.total_patients : '—'}</div>
+            <div class="stat-detail">${dashboard ? dashboard.wards_monitored?.length : 0} wards active</div></div>
+        <div class="stat-card red"><div class="stat-label">Active Alerts</div>
+            <div class="stat-value">${dashboard ? dashboard.active_alerts : '—'}</div>
+            <div class="stat-detail">${dashboard ? dashboard.critical_count : 0} critical</div></div>
+        <div class="stat-card purple"><div class="stat-label">AI Accuracy</div>
+            <div class="stat-value">${diagStats ? (diagStats.accuracy_rate * 100).toFixed(1) + '%' : '—'}</div>
+            <div class="stat-detail">${diagStats ? diagStats.total_scans_all_time : 0} scans processed</div></div>
+        <div class="stat-card cyan"><div class="stat-label">Telemetry Events</div>
+            <div class="stat-value">${telemetry ? telemetry.total_events_today : '—'}</div>
+            <div class="stat-detail">${telemetry ? telemetry.events_per_second.toFixed(1) : 0}/sec throughput</div></div>
+        <div class="stat-card amber"><div class="stat-label">Alerts Today</div>
+            <div class="stat-value">${dashboard ? dashboard.alerts_today.toLocaleString() : '—'}</div>
+            <div class="stat-detail">${dashboard ? dashboard.warning_count : 0} warnings</div></div>
+    `;
+
+    // Recent alerts
+    const alertEl = document.getElementById('recentAlerts');
+    if (alerts?.alerts) {
+        alertEl.innerHTML = alerts.alerts.slice(0, 6).map(a => `
+            <div class="alert-item ${a.severity.toLowerCase()}">
+                <div class="alert-icon">${a.severity === 'CRITICAL' ? '🔴' : '🟡'}</div>
+                <div class="alert-content">
+                    <div class="alert-message">${a.message}</div>
+                    <div class="alert-meta">
+                        <span>${a.severity}</span>
+                        <span>${new Date(a.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // Robot mini cards
+    const robotEl = document.getElementById('robotMiniCards');
+    if (robots?.robots) {
+        robotEl.innerHTML = robots.robots.slice(0, 5).map(r => `
+            <div class="card" style="padding:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <div style="font-weight:600; font-size:13px;">${r.name}</div>
+                        <div style="font-size:11px; color:var(--text-muted);">${r.hospital}</div>
+                    </div>
+                    <div style="text-align:right;">
+                        ${statusBadge(r.status)}
+                        <div style="font-size:11px; margin-top:4px;">${batteryHTML(r.battery_level)}</div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+}
+
+async function loadRobots() {
+    const data = await fetchJSON(API.robots);
+    if (!data) return;
+
+    document.getElementById('robotStats').innerHTML = `
+        <div class="stat-card blue"><div class="stat-label">Fleet Size</div><div class="stat-value">${data.fleet_size}</div></div>
+        <div class="stat-card green"><div class="stat-label">Online</div><div class="stat-value">${data.robots.filter(r=>r.status==='online').length}</div></div>
+        <div class="stat-card amber"><div class="stat-label">Active Procedures</div><div class="stat-value">${data.active_procedures}</div></div>
+        <div class="stat-card purple"><div class="stat-label">Avg Battery</div><div class="stat-value">${(data.robots.reduce((a,r)=>a+r.battery_level,0)/data.robots.length).toFixed(0)}%</div></div>
+    `;
+
+    document.getElementById('robotCards').innerHTML = data.robots.map(r => `
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">${r.name}</div>
+                ${statusBadge(r.status)}
+            </div>
+            <div class="card-row"><span class="card-row-label">Robot ID</span><span class="card-row-value" style="font-family:monospace; font-size:12px;">${r.robot_id}</span></div>
+            <div class="card-row"><span class="card-row-label">Hospital</span><span class="card-row-value">${r.hospital}</span></div>
+            <div class="card-row"><span class="card-row-label">Department</span><span class="card-row-value">${r.department}</span></div>
+            <div class="card-row"><span class="card-row-label">Type</span><span class="card-row-value">${r.type.replace(/_/g, ' ')}</span></div>
+            <div class="card-row"><span class="card-row-label">Battery</span><span class="card-row-value">${batteryHTML(r.battery_level)}</span></div>
+            <div class="card-row"><span class="card-row-label">Procedure</span><span class="card-row-value">${r.current_procedure || 'None'}</span></div>
+        </div>
+    `).join('');
+}
+
+async function loadPatients() {
+    const [patients, dashboard] = await Promise.all([fetchJSON(API.patients), fetchJSON(API.dashboard)]);
+    if (!patients) return;
+
+    document.getElementById('patientStats').innerHTML = `
+        <div class="stat-card green"><div class="stat-label">Total Patients</div><div class="stat-value">${dashboard?.total_patients || patients.patients?.length || 0}</div></div>
+        <div class="stat-card blue"><div class="stat-label">Wards Active</div><div class="stat-value">${dashboard?.wards_monitored?.length || 0}</div></div>
+        <div class="stat-card red"><div class="stat-label">Critical</div><div class="stat-value">${dashboard?.critical_count || 0}</div></div>
+        <div class="stat-card amber"><div class="stat-label">Stable</div><div class="stat-value">${dashboard?.stable_count || 0}</div></div>
+    `;
+
+    const list = patients.patients || patients;
+    document.getElementById('patientCards').innerHTML = list.map(p => {
+        const v = p.vitals || {};
+        const statusCls = p.status === 'critical' ? 'badge-critical' : 'badge-stable';
+        return `
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">${p.name}</div>
+                    <span class="card-badge ${statusCls}">${p.status}</span>
+                </div>
+                <div class="card-row"><span class="card-row-label">Ward</span><span class="card-row-value">${p.ward}</span></div>
+                <div class="card-row"><span class="card-row-label">Patient ID</span><span class="card-row-value" style="font-family:monospace; font-size:12px;">${p.patient_id}</span></div>
+                <div class="vitals-grid">
+                    <div class="vital-item"><div class="vital-label">Heart Rate</div><div class="vital-value" style="color:var(--accent-red);">${v.heart_rate || '—'} <span style="font-size:11px;">bpm</span></div></div>
+                    <div class="vital-item"><div class="vital-label">Blood Pressure</div><div class="vital-value" style="color:var(--accent-blue);">${v.blood_pressure || '—'}</div></div>
+                    <div class="vital-item"><div class="vital-label">SpO₂</div><div class="vital-value" style="color:var(--accent-cyan);">${v.spo2 ? v.spo2.toFixed(1) + '%' : '—'}</div></div>
+                    <div class="vital-item"><div class="vital-label">Temperature</div><div class="vital-value" style="color:var(--accent-amber);">${v.temperature ? v.temperature.toFixed(1) + '°C' : '—'}</div></div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function loadAlerts() {
+    const [alerts, dashboard] = await Promise.all([fetchJSON(API.alerts), fetchJSON(API.dashboard)]);
+
+    document.getElementById('alertStats').innerHTML = `
+        <div class="stat-card red"><div class="stat-label">Active Alerts</div><div class="stat-value">${dashboard?.active_alerts || '—'}</div></div>
+        <div class="stat-card amber"><div class="stat-label">Alerts Today</div><div class="stat-value">${dashboard?.alerts_today?.toLocaleString() || '—'}</div></div>
+        <div class="stat-card purple"><div class="stat-label">Critical</div><div class="stat-value">${alerts?.alerts?.filter(a=>a.severity==='CRITICAL').length || 0}</div></div>
+        <div class="stat-card blue"><div class="stat-label">Warning</div><div class="stat-value">${alerts?.alerts?.filter(a=>a.severity==='WARNING').length || 0}</div></div>
+    `;
+
+    if (alerts?.alerts) {
+        document.getElementById('alertsFeed').innerHTML = alerts.alerts.slice(0, 30).map(a => `
+            <div class="alert-item ${a.severity.toLowerCase()}">
+                <div class="alert-icon">${a.severity === 'CRITICAL' ? '🔴' : '🟡'}</div>
+                <div class="alert-content">
+                    <div class="alert-message">${a.message}</div>
+                    <div class="alert-meta">
+                        <span>${a.severity}</span>
+                        <span>${a.alert_type.replace(/_/g, ' ')}</span>
+                        <span>${new Date(a.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+}
+
+async function loadDiagnostics() {
+    const [stats, queue] = await Promise.all([fetchJSON(API.diagStats), fetchJSON(API.diagQueue)]);
+
+    document.getElementById('diagStats').innerHTML = `
+        <div class="stat-card purple"><div class="stat-label">AI Accuracy</div><div class="stat-value">${stats ? (stats.accuracy_rate * 100).toFixed(1) + '%' : '—'}</div></div>
+        <div class="stat-card blue"><div class="stat-label">Total Scans</div><div class="stat-value">${stats?.total_scans_all_time || '—'}</div></div>
+        <div class="stat-card cyan"><div class="stat-label">Avg Processing</div><div class="stat-value">${stats ? stats.average_processing_time_s.toFixed(2) + 's' : '—'}</div></div>
+        <div class="stat-card green"><div class="stat-label">Queue</div><div class="stat-value">${queue ? queue.pending : '—'}</div><div class="stat-detail">${queue?.processing || 0} processing</div></div>
+    `;
+
+    let html = '<div class="cards-grid">';
+    if (stats?.scans_by_type) {
+        html += Object.entries(stats.scans_by_type).map(([type, count]) => `
+            <div class="card">
+                <div class="card-header"><div class="card-title">${type} Scans</div><span class="card-badge badge-online">${count}</span></div>
+            </div>
+        `).join('');
+    }
+    if (stats?.results_by_category) {
+        html += `<div class="card"><div class="card-header"><div class="card-title">Results Breakdown</div></div>`;
+        html += Object.entries(stats.results_by_category).map(([cat, count]) => `
+            <div class="card-row"><span class="card-row-label">${cat}</span><span class="card-row-value">${count}</span></div>
+        `).join('');
+        html += '</div>';
+    }
+    if (queue?.recent_jobs) {
+        html += queue.recent_jobs.map(j => `
+            <div class="card">
+                <div class="card-header"><div class="card-title">Job: ${j.job_id.slice(0,8)}...</div><span class="card-badge badge-online">${j.status}</span></div>
+                <div class="card-row"><span class="card-row-label">Scan Type</span><span class="card-row-value">${j.scan_type}</span></div>
+                <div class="card-row"><span class="card-row-label">Body Region</span><span class="card-row-value">${j.body_region}</span></div>
+                <div class="card-row"><span class="card-row-label">Priority</span><span class="card-row-value">${j.priority}</span></div>
+                <div class="card-row"><span class="card-row-label">Patient</span><span class="card-row-value">${j.patient_id}</span></div>
+            </div>
+        `).join('');
+    }
+    html += '</div>';
+    document.getElementById('diagContent').innerHTML = html;
+}
+
+async function loadServices() {
+    const services = [
+        { name: 'Robot Command Service', tech: 'Python / Flask', port: 5050, url: API.healthRobot, icon: '🤖' },
+        { name: 'Patient Monitor Service', tech: 'Python / Flask', port: 5001, url: API.healthPatient, icon: '💓' },
+        { name: 'Diagnostic Engine Service', tech: 'Node.js / Express', port: 3000, url: API.healthDiag, icon: '🔬' },
+        { name: 'Telemetry Ingest Service', tech: 'Python / Flask', port: 5002, url: API.healthTelemetry, icon: '📡' },
+    ];
+
+    const results = await Promise.all(services.map(async s => {
+        const data = await fetchJSON(s.url);
+        return { ...s, healthy: !!data, data };
+    }));
+
+    document.getElementById('servicesContent').innerHTML = `
+        <table class="services-table">
+            <thead><tr><th>Service</th><th>Technology</th><th>Port</th><th>Status</th><th>Uptime</th></tr></thead>
+            <tbody>
+                ${results.map(s => `
+                    <tr>
+                        <td>${s.icon} <strong>${s.name}</strong></td>
+                        <td>${s.tech}</td>
+                        <td style="font-family:monospace;">:${s.port}</td>
+                        <td><span class="health-dot ${s.healthy ? 'healthy' : 'unhealthy'}"></span>${s.healthy ? 'Healthy' : 'Down'}</td>
+                        <td>${s.data?.uptime_seconds ? Math.floor(s.data.uptime_seconds / 60) + ' min' : '—'}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+// ── Live Clock ──
+function updateClock() {
+    document.getElementById('liveTime').textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Auto Refresh ──
+loadOverview();
+setInterval(() => {
+    const activePage = document.querySelector('.page.active')?.id?.replace('page-', '');
+    if (activePage) loadPage(activePage);
+}, 5000);
+</script>
+
+</body>
+</html>

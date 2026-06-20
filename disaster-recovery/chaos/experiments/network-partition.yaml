@@ -1,0 +1,145 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Experiment: Network Partition
+# =============================================================================
+# Purpose:    Simulate a network partition between neurosphere-core and
+#             neurosphere-vault namespaces to validate that services can
+#             continue operating with cached secrets/credentials when the
+#             HashiCorp Vault cluster becomes unreachable.
+#
+# Risk Level: HIGH
+# Blast Radius: Cross-namespace communication (core <-> vault)
+# Expected Outcome:
+#   - Services fall back to cached secrets (Vault Agent sidecar cache)
+#   - No secret rotation occurs during partition (expected)
+#   - Alert fires: "VaultConnectionLost" within 30 seconds
+#   - All patient-facing services remain operational
+#   - Services reconnect to Vault automatically after partition heals
+#   - Secret lease renewal resumes within 60 seconds of partition end
+#
+# Architecture Context:
+#   neurosphere-core: Application services (patient-monitor, robot-command, etc.)
+#   neurosphere-vault: HashiCorp Vault cluster (HA with 3 replicas)
+#   Each service pod has a Vault Agent sidecar that caches secrets locally.
+#   Cache TTL: 15 minutes (well beyond the 2-minute partition window).
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - Vault Agent sidecars confirmed running in all core pods
+#   - Secret cache is warm (services have fetched secrets at least once)
+#   - Steady-state validation passes
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: neurosphere-network-partition-vault
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: network
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/blast-radius: cross-namespace
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Creates a full network partition between neurosphere-core and
+      neurosphere-vault namespaces. Validates that Vault Agent sidecar
+      caches allow continued operation during Vault unavailability.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/network-partition
+    chaos.neurosphere.io/jira: NEURO-CHAOS-003
+    chaos.neurosphere.io/safety-gate: surgical-procedure-check
+    chaos.neurosphere.io/expected-alerts: >-
+      VaultConnectionLost, VaultLeaseRenewalFailed
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      project: neurosphere
+  direction: both
+  target:
+    selector:
+      namespaces:
+        - neurosphere-vault
+      labelSelectors:
+        app.kubernetes.io/name: vault
+    mode: all
+  duration: '2m'
+
+---
+# =============================================================================
+# Companion Partition: Vault -> Core direction
+# =============================================================================
+# Chaos Mesh partition is directional. This ensures the partition is
+# symmetric — Vault also cannot reach core services (e.g., for
+# dynamic credential push or webhook callbacks).
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: neurosphere-network-partition-vault-reverse
+  namespace: neurosphere-vault
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: network
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/blast-radius: cross-namespace
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Reverse direction of network partition — prevents Vault from
+      reaching neurosphere-core services. Combined with the forward
+      partition, this creates a full bidirectional network split.
+    chaos.neurosphere.io/paired-with: neurosphere-network-partition-vault
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces:
+      - neurosphere-vault
+    labelSelectors:
+      app.kubernetes.io/name: vault
+  direction: both
+  target:
+    selector:
+      namespaces:
+        - neurosphere-core
+      labelSelectors:
+        project: neurosphere
+    mode: all
+  duration: '2m'
+
+---
+# =============================================================================
+# Post-Partition Validation: Vault Re-sync Check
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StatusCheck
+metadata:
+  name: neurosphere-vault-resync-check
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/safety-component: post-validation
+  annotations:
+    chaos.neurosphere.io/description: >-
+      After partition heals, verify Vault connectivity is restored
+      and secret lease renewals resume successfully.
+spec:
+  type: HTTP
+  mode: Continuous
+  http:
+    url: http://vault.neurosphere-vault.svc:8200/v1/sys/health
+    method: GET
+    criteria:
+      statusCode: "200"
+  intervalSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 3
+  recordsHistoryLimit: 20

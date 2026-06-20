@@ -1,0 +1,29 @@
+# =============================================================================
+# NeuroSphere — Robot Command Service (ClusterIP)
+# =============================================================================
+# Internal service endpoint for the Robot Command Service.
+# Accessible only within the cluster via service discovery.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: robot-command-service
+  namespace: neurosphere-core
+  labels:
+    app: robot-command-service
+    tier: backend
+    domain: surgical-robotics
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "Internal endpoint for surgical robot command and control"
+spec:
+  type: ClusterIP
+  selector:
+    app: robot-command-service
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      protocol: TCP

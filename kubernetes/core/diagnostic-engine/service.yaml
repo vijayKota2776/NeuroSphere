@@ -1,0 +1,29 @@
+# =============================================================================
+# NeuroSphere — Diagnostic Engine Service (ClusterIP)
+# =============================================================================
+# Internal service endpoint for the AI Diagnostic Engine.
+# Handles medical imaging inference requests from other core services.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: diagnostic-engine-service
+  namespace: neurosphere-core
+  labels:
+    app: diagnostic-engine-service
+    tier: backend
+    domain: diagnostics
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "Internal endpoint for AI diagnostic engine — DICOM and imaging analysis"
+spec:
+  type: ClusterIP
+  selector:
+    app: diagnostic-engine-service
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP

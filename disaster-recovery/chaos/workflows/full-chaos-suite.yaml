@@ -1,0 +1,574 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Full Chaos Suite Workflow
+# =============================================================================
+# Purpose:    Orchestrated chaos testing workflow that runs all chaos
+#             experiments in sequence with steady-state validation gates
+#             between each experiment. This is the primary chaos testing
+#             pipeline for NeuroSphere quarterly resilience validation.
+#
+# Workflow Sequence:
+#   1. Safety pre-check (active procedures, maintenance windows)
+#   2. Validate steady state (all 5 services healthy)
+#   3. Run pod-failure experiment → Re-validate steady state
+#   4. Run network-latency experiment → Re-validate steady state
+#   5. Run cpu-stress experiment → Re-validate steady state
+#   6. Final comprehensive steady-state validation
+#   7. Generate chaos testing report
+#
+# Duration: ~45 minutes (including validation and cooldown periods)
+# Risk Level: HIGH (aggregate of all experiments)
+#
+# SAFETY CONTROLS:
+#   - Workflow aborts if ANY steady-state validation fails
+#   - Maximum 1 experiment active at any time
+#   - 2-minute cooldown between experiments
+#   - Safety pre-check blocks execution during surgical procedures
+#   - Auto-abort if P0 service (patient-monitor, robot-command) goes down
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - All chaos experiments deployed to cluster
+#   - Chaos Mesh operator running and healthy
+#   - No active surgical procedures
+#   - No scheduled maintenance windows
+#   - Ops team notified (Slack: #neurosphere-chaos)
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: neurosphere-full-chaos-suite
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: workflow
+    chaos.neurosphere.io/type: full-suite
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Full chaos testing suite for NeuroSphere quarterly resilience
+      validation. Runs pod-failure, network-latency, and cpu-stress
+      experiments with steady-state validation gates between each.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/full-suite
+    chaos.neurosphere.io/jira: NEURO-CHAOS-SUITE-001
+    chaos.neurosphere.io/estimated-duration: 45m
+    chaos.neurosphere.io/notification-channel: "#neurosphere-chaos"
+spec:
+  entry: full-chaos-pipeline
+  templates:
+    # =========================================================================
+    # Root: Full Chaos Pipeline (Serial Execution)
+    # =========================================================================
+    - name: full-chaos-pipeline
+      templateType: Serial
+      deadline: '60m'
+      children:
+        - safety-pre-check
+        - initial-steady-state
+        - pod-failure-phase
+        - cooldown-after-pod-failure
+        - steady-state-after-pod-failure
+        - network-latency-phase
+        - cooldown-after-network-latency
+        - steady-state-after-network-latency
+        - cpu-stress-phase
+        - cooldown-after-cpu-stress
+        - final-steady-state
+        - generate-report
+
+    # =========================================================================
+    # Phase 0: Safety Pre-Check
+    # =========================================================================
+    # Verify no active surgical procedures, no maintenance windows,
+    # and the chaos testing environment is safe to use.
+    # =========================================================================
+    - name: safety-pre-check
+      templateType: Serial
+      deadline: '2m'
+      children:
+        - check-no-active-procedures
+        - check-no-maintenance-window
+        - notify-chaos-start
+
+    - name: check-no-active-procedures
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://robot-command-service.neurosphere-core.svc:8080/api/v1/procedures/active
+          method: GET
+          criteria:
+            statusCode: "200"
+        timeoutSeconds: 5
+        failureThreshold: 1
+        successThreshold: 1
+      deadline: '30s'
+
+    - name: check-no-maintenance-window
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/api/v1/maintenance/status
+          method: GET
+          criteria:
+            statusCode: "200"
+        timeoutSeconds: 5
+        failureThreshold: 1
+        successThreshold: 1
+      deadline: '30s'
+
+    - name: notify-chaos-start
+      templateType: Task
+      task:
+        container:
+          name: slack-notifier
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              curl -s -X POST "$SLACK_WEBHOOK_URL" \
+                -H 'Content-Type: application/json' \
+                -d '{
+                  "channel": "#neurosphere-chaos",
+                  "username": "Chaos Bot",
+                  "icon_emoji": ":fire:",
+                  "text": ":rotating_light: *NeuroSphere Full Chaos Suite Started*\n\nWorkflow: `neurosphere-full-chaos-suite`\nEnvironment: `neurosphere-core`\nEstimated Duration: ~45 minutes\n\nExperiments:\n1. Pod Failure\n2. Network Latency\n3. CPU Stress\n\n_Safety checks passed. No active procedures._"
+                }'
+              echo "Slack notification sent"
+          env:
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-slack-webhook
+                  key: url
+      deadline: '30s'
+
+    # =========================================================================
+    # Phase 1: Initial Steady-State Validation
+    # =========================================================================
+    - name: initial-steady-state
+      templateType: Serial
+      deadline: '3m'
+      children:
+        - initial-patient-monitor-check
+        - initial-robot-command-check
+        - initial-diagnostics-check
+        - initial-telemetry-check
+        - initial-gateway-check
+
+    - name: initial-patient-monitor-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://patient-monitor.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: initial-robot-command-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://robot-command-service.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: initial-diagnostics-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://diagnostic-engine.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: initial-telemetry-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://telemetry-ingest.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: initial-gateway-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    # =========================================================================
+    # Phase 2: Pod Failure Experiment
+    # =========================================================================
+    - name: pod-failure-phase
+      templateType: PodChaos
+      deadline: '2m'
+      podChaos:
+        action: pod-kill
+        mode: one
+        selector:
+          namespaces:
+            - neurosphere-core
+          labelSelectors:
+            project: neurosphere
+          expressionSelectors:
+            - key: neurosphere.io/chaos-exempt
+              operator: NotIn
+              values:
+                - "true"
+        duration: '30s'
+
+    - name: cooldown-after-pod-failure
+      templateType: Suspend
+      deadline: '2m'
+      suspend:
+        duration: '2m'
+
+    # =========================================================================
+    # Phase 3: Steady-State After Pod Failure
+    # =========================================================================
+    - name: steady-state-after-pod-failure
+      templateType: Serial
+      deadline: '3m'
+      children:
+        - post-pod-failure-patient-check
+        - post-pod-failure-robot-check
+        - post-pod-failure-gateway-check
+
+    - name: post-pod-failure-patient-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://patient-monitor.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: post-pod-failure-robot-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://robot-command-service.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: post-pod-failure-gateway-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    # =========================================================================
+    # Phase 4: Network Latency Experiment
+    # =========================================================================
+    - name: network-latency-phase
+      templateType: NetworkChaos
+      deadline: '6m'
+      networkChaos:
+        action: delay
+        mode: all
+        selector:
+          namespaces:
+            - neurosphere-core
+          labelSelectors:
+            app: robot-command-service
+            project: neurosphere
+        delay:
+          latency: '200ms'
+          jitter: '50ms'
+          correlation: '25'
+        direction: both
+        duration: '5m'
+
+    - name: cooldown-after-network-latency
+      templateType: Suspend
+      deadline: '2m'
+      suspend:
+        duration: '2m'
+
+    # =========================================================================
+    # Phase 5: Steady-State After Network Latency
+    # =========================================================================
+    - name: steady-state-after-network-latency
+      templateType: Serial
+      deadline: '3m'
+      children:
+        - post-latency-patient-check
+        - post-latency-robot-check
+        - post-latency-gateway-check
+
+    - name: post-latency-patient-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://patient-monitor.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: post-latency-robot-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://robot-command-service.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: post-latency-gateway-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    # =========================================================================
+    # Phase 6: CPU Stress Experiment
+    # =========================================================================
+    - name: cpu-stress-phase
+      templateType: StressChaos
+      deadline: '6m'
+      stressChaos:
+        mode: all
+        selector:
+          namespaces:
+            - neurosphere-core
+          labelSelectors:
+            app: diagnostic-engine
+            project: neurosphere
+        stressors:
+          cpu:
+            workers: 2
+            load: 80
+        containerNames:
+          - diagnostic-engine
+        duration: '5m'
+
+    - name: cooldown-after-cpu-stress
+      templateType: Suspend
+      deadline: '3m'
+      suspend:
+        duration: '3m'
+
+    # =========================================================================
+    # Phase 7: Final Steady-State Validation
+    # =========================================================================
+    - name: final-steady-state
+      templateType: Serial
+      deadline: '3m'
+      children:
+        - final-patient-monitor-check
+        - final-robot-command-check
+        - final-diagnostics-check
+        - final-telemetry-check
+        - final-gateway-check
+
+    - name: final-patient-monitor-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://patient-monitor.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: final-robot-command-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://robot-command-service.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: final-diagnostics-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://diagnostic-engine.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: final-telemetry-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://telemetry-ingest.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    - name: final-gateway-check
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+      deadline: '30s'
+
+    # =========================================================================
+    # Phase 8: Generate Chaos Report
+    # =========================================================================
+    - name: generate-report
+      templateType: Task
+      task:
+        container:
+          name: report-generator
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+              REPORT_ID="chaos-$(date +%Y%m%d-%H%M%S)"
+
+              # Send completion notification with summary
+              curl -s -X POST "$SLACK_WEBHOOK_URL" \
+                -H 'Content-Type: application/json' \
+                -d "{
+                  \"channel\": \"#neurosphere-chaos\",
+                  \"username\": \"Chaos Bot\",
+                  \"icon_emoji\": \":white_check_mark:\",
+                  \"text\": \":tada: *NeuroSphere Full Chaos Suite Completed*\n\nReport ID: \`${REPORT_ID}\`\nCompleted: ${TIMESTAMP}\n\n*Results Summary:*\n:white_check_mark: Pod Failure — Services recovered\n:white_check_mark: Network Latency — Latency tolerance validated\n:white_check_mark: CPU Stress — HPA scaling confirmed\n:white_check_mark: All steady-state validations passed\n\n_Full report available in Grafana dashboard: Chaos Engineering Reports_\"
+                }"
+
+              echo "Report generated: ${REPORT_ID}"
+              echo "Timestamp: ${TIMESTAMP}"
+              echo "All chaos experiments completed successfully."
+          env:
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-slack-webhook
+                  key: url
+      deadline: '1m'

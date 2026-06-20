@@ -1,0 +1,347 @@
+// =============================================================================
+// NeuroSphere Medical Robotics — Deployment / Rollback Pipeline
+// =============================================================================
+// Purpose: Targeted deploy or rollback of NeuroSphere services.
+//          This pipeline is independent of the full CI pipeline and is intended
+//          for operations teams that need to promote a known-good image or
+//          roll back after a failed deployment.
+//
+// Compliance: FDA 21 CFR Part 11 — production deployments require explicit
+//             human approval and full audit trail.
+// =============================================================================
+
+pipeline {
+    agent { label 'neurosphere-agent' }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        ansiColor('xterm')
+    }
+
+    environment {
+        DOCKER_REGISTRY = credentials('docker-registry-url')
+        AWS_REGION      = 'us-east-1'
+        PROJECT_NAME    = 'neurosphere'
+        SLACK_WEBHOOK   = credentials('slack-webhook-url')
+        KUBECONFIG      = credentials('neurosphere-kubeconfig')
+        K8S_DIR         = "${WORKSPACE}/kubernetes"
+    }
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target deployment environment'
+        )
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: '',
+            description: 'Image tag to deploy (e.g. git SHA or semver). Required for deploy.'
+        )
+        booleanParam(
+            name: 'ROLLBACK',
+            defaultValue: false,
+            description: 'Roll back to the previous deployment revision instead of deploying'
+        )
+        choice(
+            name: 'SERVICE',
+            choices: [
+                'all',
+                'robot-command-service',
+                'diagnostic-engine-service',
+                'patient-monitor-service',
+                'telemetry-ingest-service',
+                'neurosphere-gateway'
+            ],
+            description: 'Service to deploy/rollback (or "all" for every service)'
+        )
+    }
+
+    stages {
+
+        // ---------------------------------------------------------------------
+        // 1. VALIDATE — sanity-check parameters before proceeding
+        // ---------------------------------------------------------------------
+        stage('Validate') {
+            steps {
+                script {
+                    env.TARGET_ENV  = params.ENVIRONMENT
+                    env.NAMESPACE   = "neurosphere-${params.ENVIRONMENT}"
+                    env.DEPLOY_TAG  = params.IMAGE_TAG?.trim() ?: ''
+
+                    // Build the service list
+                    if (params.SERVICE == 'all') {
+                        env.SERVICE_LIST = 'robot-command-service diagnostic-engine-service patient-monitor-service telemetry-ingest-service neurosphere-gateway'
+                    } else {
+                        env.SERVICE_LIST = params.SERVICE
+                    }
+
+                    echo "============================================="
+                    echo "NeuroSphere Deploy Pipeline"
+                    echo "============================================="
+                    echo "Mode:        ${params.ROLLBACK ? 'ROLLBACK' : 'DEPLOY'}"
+                    echo "Environment: ${env.TARGET_ENV}"
+                    echo "Namespace:   ${env.NAMESPACE}"
+                    echo "Services:    ${env.SERVICE_LIST}"
+                    echo "Image Tag:   ${env.DEPLOY_TAG ?: '(n/a — rollback)'}"
+                    echo "============================================="
+
+                    // Deploy mode requires an image tag
+                    if (!params.ROLLBACK && !env.DEPLOY_TAG) {
+                        error '⛔ IMAGE_TAG is required for deploy mode. Please provide a valid image tag.'
+                    }
+
+                    // Verify cluster connectivity
+                    sh """
+                        kubectl cluster-info || { echo '⛔ Cannot reach Kubernetes cluster'; exit 1; }
+                        kubectl get namespace ${NAMESPACE} || { echo '⛔ Namespace ${NAMESPACE} does not exist'; exit 1; }
+                    """
+
+                    echo '✅ Validation passed'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 2. APPROVAL GATE — required for production (FDA compliance)
+        // ---------------------------------------------------------------------
+        stage('Production Approval') {
+            when {
+                expression { return params.ENVIRONMENT == 'prod' }
+            }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: """
+                        🏥 PRODUCTION ${params.ROLLBACK ? 'ROLLBACK' : 'DEPLOYMENT'} APPROVAL
+                        ─────────────────────────────────────────────
+                        Action    : ${params.ROLLBACK ? 'ROLLBACK to previous revision' : "DEPLOY tag ${env.DEPLOY_TAG}"}
+                        Services  : ${env.SERVICE_LIST}
+                        Namespace : ${env.NAMESPACE}
+                        ─────────────────────────────────────────────
+                        This action affects PRODUCTION systems processing
+                        protected health information (PHI). Approval is
+                        required per FDA 21 CFR Part 11 §11.10(a).
+                    """,
+                    ok: "Approve ${params.ROLLBACK ? 'Rollback' : 'Deployment'}",
+                    submitter: 'devops-leads,release-managers'
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 3a. ROLLBACK — revert deployments to previous revision
+        // ---------------------------------------------------------------------
+        stage('Rollback') {
+            when {
+                expression { return params.ROLLBACK }
+            }
+            steps {
+                script {
+                    def services = env.SERVICE_LIST.split(' ')
+
+                    for (svc in services) {
+                        echo "⏪ Rolling back ${svc} in ${NAMESPACE}..."
+
+                        // Capture current revision for audit log
+                        def currentRevision = sh(
+                            script: "kubectl -n ${NAMESPACE} rollout history deployment/${svc} | tail -1 | awk '{print \$1}'",
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Current revision: ${currentRevision}"
+
+                        // Execute rollback
+                        sh """
+                            kubectl -n ${NAMESPACE} rollout undo deployment/${svc}
+                            kubectl -n ${NAMESPACE} rollout status deployment/${svc} --timeout=300s
+                        """
+
+                        // Verify rollback succeeded
+                        def newRevision = sh(
+                            script: "kubectl -n ${NAMESPACE} rollout history deployment/${svc} | tail -1 | awk '{print \$1}'",
+                            returnStdout: true
+                        ).trim()
+
+                        echo "✅ ${svc} rolled back: revision ${currentRevision} → ${newRevision}"
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 3b. DEPLOY — apply new image tag via kustomize
+        // ---------------------------------------------------------------------
+        stage('Deploy') {
+            when {
+                expression { return !params.ROLLBACK }
+            }
+            steps {
+                script {
+                    def services   = env.SERVICE_LIST.split(' ')
+                    def overlayPath = "${K8S_DIR}/overlays/${TARGET_ENV}"
+
+                    // Authenticate to ECR
+                    sh """
+                        aws ecr get-login-password --region ${AWS_REGION} \
+                            | docker login --username AWS --password-stdin ${DOCKER_REGISTRY}
+                    """
+
+                    // Verify image exists in registry before deploying
+                    for (svc in services) {
+                        echo "Verifying image exists: ${svc}:${DEPLOY_TAG}..."
+                        sh """
+                            docker manifest inspect \
+                                ${DOCKER_REGISTRY}/${PROJECT_NAME}/${svc}:${DEPLOY_TAG} \
+                                > /dev/null 2>&1 \
+                                || { echo "⛔ Image ${svc}:${DEPLOY_TAG} not found in registry"; exit 1; }
+                        """
+                    }
+
+                    // Update kustomize overlay with new image tags
+                    for (svc in services) {
+                        sh """
+                            cd ${overlayPath}
+                            kustomize edit set image \
+                                ${svc}=${DOCKER_REGISTRY}/${PROJECT_NAME}/${svc}:${DEPLOY_TAG}
+                        """
+                    }
+
+                    // Apply manifests
+                    echo "Deploying to ${TARGET_ENV}..."
+                    sh """
+                        kustomize build ${overlayPath} | kubectl apply -f -
+                    """
+
+                    // Wait for rollout to complete
+                    for (svc in services) {
+                        sh """
+                            kubectl -n ${NAMESPACE} rollout status deployment/${svc} --timeout=300s
+                        """
+                    }
+
+                    echo "✅ Deployment to ${TARGET_ENV} complete (tag: ${DEPLOY_TAG})"
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 4. SMOKE TESTS — post-deploy / post-rollback validation
+        // ---------------------------------------------------------------------
+        stage('Smoke Tests') {
+            steps {
+                script {
+                    def baseUrls = [
+                        dev:     'https://dev.neurosphere.internal',
+                        staging: 'https://staging.neurosphere.internal',
+                        prod:    'https://api.neurosphere.med'
+                    ]
+                    def baseUrl = baseUrls[params.ENVIRONMENT]
+
+                    echo "Running smoke tests against ${baseUrl}..."
+
+                    // Health checks for all deployed services
+                    def healthPaths = [
+                        'robot-command-service':      '/api/v1/robot-command/health',
+                        'diagnostic-engine-service':  '/api/v1/diagnostic-engine/health',
+                        'patient-monitor-service':    '/api/v1/patient-monitor/health',
+                        'telemetry-ingest-service':   '/api/v1/telemetry-ingest/health',
+                        'neurosphere-gateway':        '/health'
+                    ]
+
+                    def services = env.SERVICE_LIST.split(' ')
+                    def failures = []
+
+                    for (svc in services) {
+                        def path = healthPaths[svc]
+                        if (!path) continue
+
+                        def httpStatus = sh(
+                            script: """
+                                curl -s -o /dev/null -w '%{http_code}' \
+                                    --max-time 10 \
+                                    --retry 3 \
+                                    --retry-delay 5 \
+                                    ${baseUrl}${path}
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        if (httpStatus == '200') {
+                            echo "✅ ${svc} → HTTP ${httpStatus}"
+                        } else {
+                            echo "❌ ${svc} → HTTP ${httpStatus}"
+                            failures.add("${svc} (HTTP ${httpStatus})")
+                        }
+                    }
+
+                    if (failures.size() > 0) {
+                        error "⛔ Smoke tests failed for: ${failures.join(', ')}"
+                    }
+
+                    echo '✅ All smoke tests passed'
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // POST — Slack notifications
+    // =========================================================================
+    post {
+        success {
+            script {
+                def action = params.ROLLBACK ? 'ROLLBACK' : 'DEPLOY'
+                slackSend(
+                    channel: '#neurosphere-deployments',
+                    color: 'good',
+                    message: """
+                        ✅ *NeuroSphere ${action} #${env.BUILD_NUMBER} — SUCCESS*
+                        • Environment: `${params.ENVIRONMENT}`
+                        • Services: `${env.SERVICE_LIST}`
+                        • ${params.ROLLBACK ? 'Action: Rolled back to previous revision' : "Image Tag: `${env.DEPLOY_TAG}`"}
+                        • Initiated by: ${currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userName ?: 'automation'}
+                        • <${env.BUILD_URL}|View Build>
+                    """.stripIndent().trim()
+                )
+            }
+        }
+
+        failure {
+            script {
+                def action = params.ROLLBACK ? 'ROLLBACK' : 'DEPLOY'
+                slackSend(
+                    channel: '#neurosphere-deployments',
+                    color: 'danger',
+                    message: """
+                        ❌ *NeuroSphere ${action} #${env.BUILD_NUMBER} — FAILED*
+                        • Environment: `${params.ENVIRONMENT}`
+                        • Services: `${env.SERVICE_LIST}`
+                        • Failed Stage: `${env.STAGE_NAME}`
+                        • <${env.BUILD_URL}console|View Console>
+                    """.stripIndent().trim()
+                )
+            }
+        }
+
+        aborted {
+            script {
+                slackSend(
+                    channel: '#neurosphere-deployments',
+                    color: 'warning',
+                    message: """
+                        ⚠️ *NeuroSphere Deploy #${env.BUILD_NUMBER} — ABORTED*
+                        • Environment: `${params.ENVIRONMENT}`
+                        • <${env.BUILD_URL}|View Build>
+                    """.stripIndent().trim()
+                )
+            }
+        }
+
+        cleanup {
+            cleanWs()
+        }
+    }
+}

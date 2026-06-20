@@ -1,0 +1,117 @@
+# =============================================================================
+# Ingress: neurosphere-ingress
+# =============================================================================
+# Primary ingress resource for the NeuroSphere Medical Robotics API.
+# Routes external HTTPS traffic to internal microservices via path-based
+# routing through the Nginx Ingress Controller.
+#
+# Security features:
+#   - TLS termination via cert-manager (Let's Encrypt)
+#   - Rate limiting: 10 req/min to prevent abuse
+#   - CORS enabled for web dashboard clients
+#   - SSL redirect enforced
+#   - Request body limited to 10MB (imaging uploads capped)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: neurosphere-ingress
+  namespace: neurosphere-core
+  labels:
+    app: neurosphere-ingress
+    component: networking
+    part-of: neurosphere
+  annotations:
+    # --- Ingress Controller ---
+    kubernetes.io/ingress.class: nginx
+
+    # --- TLS / SSL ---
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+
+    # --- Rate Limiting ---
+    # Protect backend services from excessive requests.
+    # Medical APIs should not be hammered; 10 req/min per client is safe.
+    nginx.ingress.kubernetes.io/rate-limit: "10"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+
+    # --- Request Body ---
+    # Allow up to 10MB for diagnostic image uploads and telemetry payloads
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+    # --- CORS ---
+    # Enable CORS for web-based clinical dashboards
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+
+    # --- Timeouts ---
+    # Diagnostic engine requests may take longer due to AI inference
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+spec:
+  tls:
+    - hosts:
+        - api.neurosphere.io
+      secretName: neurosphere-tls
+  rules:
+    - host: api.neurosphere.io
+      http:
+        paths:
+          # ------------------------------------------------------------------
+          # Robot Command Service (Flask, port 5000)
+          # Handles: robot registration, command dispatch, kinematics queries
+          # ------------------------------------------------------------------
+          - path: /api/robots
+            pathType: Prefix
+            backend:
+              service:
+                name: robot-command-service
+                port:
+                  number: 5000
+
+          # ------------------------------------------------------------------
+          # Diagnostic Engine Service (Node.js/Express, port 3000)
+          # Handles: diagnostic session management, AI inference requests
+          # ------------------------------------------------------------------
+          - path: /api/diagnostics
+            pathType: Prefix
+            backend:
+              service:
+                name: diagnostic-engine-service
+                port:
+                  number: 3000
+
+          # ------------------------------------------------------------------
+          # Patient Monitor Service (Flask, port 5001)
+          # Handles: patient vitals, alerts, monitoring sessions
+          # ------------------------------------------------------------------
+          - path: /api/patients
+            pathType: Prefix
+            backend:
+              service:
+                name: patient-monitor-service
+                port:
+                  number: 5001
+
+          # ------------------------------------------------------------------
+          # Telemetry Ingest Service (Flask, port 5002)
+          # Handles: sensor telemetry ingestion, device heartbeats
+          # ------------------------------------------------------------------
+          - path: /api/telemetry
+            pathType: Prefix
+            backend:
+              service:
+                name: telemetry-ingest-service
+                port:
+                  number: 5002
+
+          # ------------------------------------------------------------------
+          # Gateway Health Check (Nginx/gateway, port 80)
+          # Used by external monitors and load balancers for liveness probing
+          # ------------------------------------------------------------------
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: gateway-service
+                port:
+                  number: 80

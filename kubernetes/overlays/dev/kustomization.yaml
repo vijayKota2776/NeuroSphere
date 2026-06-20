@@ -1,0 +1,204 @@
+# =============================================================================
+# NeuroSphere — Development Overlay
+# =============================================================================
+# Lightweight configuration for local/dev cluster environments:
+#   - Single replica per service (minimize resource usage)
+#   - Reduced resource requests/limits
+#   - Dev-specific labels for identification
+#
+# Usage:
+#   kubectl apply -k kubernetes/overlays/dev/
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Inherit all resources from the base configuration
+resources:
+  - ../../
+
+# ---------------------------------------------------------------------------
+# Dev-specific labels
+# ---------------------------------------------------------------------------
+commonLabels:
+  environment: development
+  tier: non-production
+
+# ---------------------------------------------------------------------------
+# Replica patches — scale all services to 1 replica for dev
+# ---------------------------------------------------------------------------
+patches:
+  # --- robot-command-service: 1 replica, reduced resources ---
+  - target:
+      kind: Deployment
+      name: robot-command-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: robot-command-service
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: robot-command-service
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+
+  # --- diagnostic-engine-service: 1 replica, reduced resources ---
+  - target:
+      kind: Deployment
+      name: diagnostic-engine-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: diagnostic-engine-service
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: diagnostic-engine-service
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+
+  # --- patient-monitor-service: 1 replica, reduced resources ---
+  - target:
+      kind: Deployment
+      name: patient-monitor-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: patient-monitor-service
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: patient-monitor-service
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+
+  # --- telemetry-ingest-service: 1 replica, reduced resources ---
+  - target:
+      kind: Deployment
+      name: telemetry-ingest-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: telemetry-ingest-service
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: telemetry-ingest-service
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+
+  # --- gateway-service: 1 replica, reduced resources ---
+  - target:
+      kind: Deployment
+      name: gateway-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: gateway-service
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: gateway-service
+                resources:
+                  requests:
+                    cpu: 25m
+                    memory: 32Mi
+                  limits:
+                    cpu: 100m
+                    memory: 128Mi
+
+  # --- Disable HPAs in dev (not needed for single replicas) ---
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: robot-command-hpa
+    patch: |
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: robot-command-hpa
+      spec:
+        minReplicas: 1
+        maxReplicas: 2
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: diagnostic-engine-hpa
+    patch: |
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: diagnostic-engine-hpa
+      spec:
+        minReplicas: 1
+        maxReplicas: 2
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: patient-monitor-hpa
+    patch: |
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: patient-monitor-hpa
+      spec:
+        minReplicas: 1
+        maxReplicas: 2
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: telemetry-ingest-hpa
+    patch: |
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: telemetry-ingest-hpa
+      spec:
+        minReplicas: 1
+        maxReplicas: 2
+
+  # --- Relax PDBs in dev (allow full disruption) ---
+  - target:
+      kind: PodDisruptionBudget
+      name: patient-monitor-pdb
+    patch: |
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: patient-monitor-pdb
+      spec:
+        minAvailable: 0

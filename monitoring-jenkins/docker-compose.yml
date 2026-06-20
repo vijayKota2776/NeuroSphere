@@ -1,0 +1,63 @@
+services:
+  # -----------------------------------------------------------------------
+  # Prometheus — Metrics Collection
+  # -----------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: neurosphere-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - neurosphere-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # -----------------------------------------------------------------------
+  # Grafana — Dashboards & Visualization
+  # -----------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: neurosphere-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=neurosphere
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/overview.json
+    volumes:
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+      - ./dashboards:/var/lib/grafana/dashboards
+    networks:
+      - neurosphere-network
+    depends_on:
+      - prometheus
+
+  # -----------------------------------------------------------------------
+  # Jenkins — CI/CD Pipeline
+  # -----------------------------------------------------------------------
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: neurosphere-jenkins
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+      - "50000:50000"
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false -Xmx512m
+    volumes:
+      - jenkins-data:/var/jenkins_home
+    networks:
+      - neurosphere-network
+
+volumes:
+  jenkins-data:
+
+networks:
+  neurosphere-network:
+    external: true

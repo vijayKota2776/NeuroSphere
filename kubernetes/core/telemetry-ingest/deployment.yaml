@@ -1,0 +1,125 @@
+# =============================================================================
+# NeuroSphere — Telemetry Ingest Service Deployment
+# =============================================================================
+# The Telemetry Ingest Service is the high-throughput data pipeline for
+# surgical robot telemetry. It ingests streams of joint position data,
+# force-torque sensor readings, instrument tip coordinates, and environmental
+# sensor data (OR temperature, humidity, electromagnetic interference levels).
+#
+# Data is buffered, validated, and forwarded to the time-series datastore
+# for real-time dashboarding and post-operative analysis.
+#
+# Compliance: IEC-62443 (Industrial Cybersecurity)
+# Criticality: HIGH — telemetry gaps can mask equipment malfunctions
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-ingest-service
+  namespace: neurosphere-core
+  labels:
+    app: telemetry-ingest-service
+    tier: backend
+    domain: telemetry
+    compliance: iec-62443
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "High-throughput telemetry ingestion for surgical robot sensor data"
+    compliance-standard: "IEC-62443 — Industrial control systems data integrity"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: telemetry-ingest-service
+  template:
+    metadata:
+      labels:
+        app: telemetry-ingest-service
+        tier: backend
+        domain: telemetry
+        compliance: iec-62443
+        project: neurosphere
+      annotations:
+        # -- Prometheus scraping configuration --
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5002"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        runAsNonRoot: true
+
+      containers:
+        - name: telemetry-ingest-service
+          image: neurosphere/telemetry-ingest-service:latest
+          ports:
+            - name: http
+              containerPort: 5002
+              protocol: TCP
+
+          # -- Moderate resources for high-throughput data buffering --
+          resources:
+            requests:
+              cpu: 150m
+              memory: 192Mi
+            limits:
+              cpu: 750m
+              memory: 384Mi
+
+          # -- Liveness probe: is the process alive? --
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5002
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Readiness probe: is the service ready to accept traffic? --
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 5002
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Environment variables from ConfigMap --
+          env:
+            - name: SERVICE_NAME
+              value: "telemetry-ingest-service"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: LOG_LEVEL
+            - name: FLASK_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: FLASK_ENV
+            - name: METRICS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: METRICS_ENABLED
+            - name: TELEMETRY_BUFFER_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: TELEMETRY_BUFFER_SIZE
+            - name: SERVICE_DISCOVERY_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: SERVICE_DISCOVERY_ENABLED
+
+          # -- Container security context --
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false

@@ -1,0 +1,116 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Experiment: Network Latency Injection
+# =============================================================================
+# Purpose:    Inject 200ms latency (±50ms jitter) into robot-command-service
+#             network path to validate that the surgical robotics control loop
+#             degrades gracefully under adverse network conditions.
+#
+# Risk Level: HIGH
+# Blast Radius: robot-command-service network path
+# Expected Outcome:
+#   - Robot command queue buffers commands (no data loss)
+#   - Telemetry streaming degrades to batch mode at >150ms latency
+#   - Surgical safety interlock engages at >300ms round-trip
+#   - Alert fires: "RobotCommandLatencyExceeded" within 60 seconds
+#   - HPA does NOT scale (latency is not a CPU/memory issue)
+#
+# CRITICAL SAFETY:
+#   - ABORT IMMEDIATELY if active surgical procedures detected
+#   - This experiment MUST NOT run during any robotic-assisted procedure
+#   - Pre-check queries robot-command-service /api/v1/procedures/active
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - No active surgical procedures (abort condition enforced)
+#   - Steady-state validation passes
+#   - Network policies allow chaos-mesh traffic injection
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: neurosphere-network-latency
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: network
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/blast-radius: service-network
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Injects 200ms network latency with 50ms jitter into
+      robot-command-service to test surgical system latency tolerance.
+      The robotic control loop is designed to tolerate up to 250ms
+      one-way latency before engaging the safety interlock.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/network-latency
+    chaos.neurosphere.io/jira: NEURO-CHAOS-002
+    chaos.neurosphere.io/abort-condition: active-procedures-gt-zero
+    chaos.neurosphere.io/safety-gate: surgical-procedure-check
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      app: robot-command-service
+      project: neurosphere
+  delay:
+    latency: '200ms'
+    # Jitter adds ±50ms randomness to simulate real-world network variance.
+    # Real hospital networks exhibit 10-80ms jitter during peak hours.
+    jitter: '50ms'
+    # Correlation controls how much the current latency correlates with
+    # the previous packet's latency. 25% simulates bursty jitter patterns.
+    correlation: '25'
+  # Direction: both ingress and egress to simulate full-path degradation
+  direction: both
+  # Target specific upstream services that communicate with robot-command
+  target:
+    selector:
+      namespaces:
+        - neurosphere-core
+      labelSelectors:
+        project: neurosphere
+    mode: all
+  duration: '5m'
+
+---
+# =============================================================================
+# Abort Condition: Active Surgical Procedure Monitor
+# =============================================================================
+# This StatusCheck resource monitors the robot-command-service for active
+# procedures. If any active procedure is detected, the chaos experiment
+# is automatically aborted to ensure patient safety.
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StatusCheck
+metadata:
+  name: neurosphere-active-procedure-check
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/safety-component: abort-condition
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Monitors robot-command-service for active surgical procedures.
+      Returns failure if any procedure is active, causing the parent
+      chaos experiment to abort immediately.
+spec:
+  type: HTTP
+  mode: Continuous
+  http:
+    url: http://robot-command-service.neurosphere-core.svc:8080/api/v1/procedures/active
+    method: GET
+    criteria:
+      statusCode: "200"
+    # Body must contain: {"active_procedures": 0}
+    # Any non-zero value triggers abort
+  intervalSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 1
+  successThreshold: 1
+  recordsHistoryLimit: 10

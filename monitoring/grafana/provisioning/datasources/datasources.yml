@@ -1,0 +1,44 @@
+# =============================================================================
+# NeuroSphere — Grafana Datasource Provisioning
+# =============================================================================
+
+apiVersion: 1
+
+deleteDatasources: []
+
+datasources:
+  # ---- Prometheus (primary metrics store) ----
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    orgId: 1
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: "15s"
+      exemplarTraceIdDestinations:
+        - name: traceID
+          datasourceUid: tempo
+    version: 1
+
+  # ---- Elasticsearch (log aggregation & search) ----
+  - name: Elasticsearch
+    type: elasticsearch
+    access: proxy
+    orgId: 1
+    uid: elasticsearch
+    url: http://elasticsearch:9200
+    isDefault: false
+    editable: false
+    database: "neurosphere-*"
+    jsonData:
+      esVersion: "8.0.0"
+      timeField: "@timestamp"
+      logMessageField: message
+      logLevelField: level
+      maxConcurrentShardRequests: 5
+      interval: Daily
+    version: 1

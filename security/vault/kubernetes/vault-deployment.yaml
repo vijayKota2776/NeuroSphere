@@ -1,0 +1,257 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Vault Server Deployment
+# =============================================================================
+# Deploys HashiCorp Vault for centralized secret management.
+#
+# HIPAA Compliance:
+#   - IPC_LOCK capability prevents secret data from being swapped to disk
+#   - Audit volume persists all access logs for compliance retention
+#   - Resource limits prevent noisy-neighbor impact on clinical workloads
+#   - Liveness/readiness probes ensure high availability
+#
+# Production Notes:
+#   - Enable TLS in vault-config.hcl before deploying to production
+#   - Use Raft integrated storage or Consul for HA deployments
+#   - Configure auto-unseal with AWS KMS, GCP Cloud KMS, or Azure Key Vault
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  namespace: neurosphere-vault
+  labels:
+    app: vault
+    component: secrets-management
+    part-of: neurosphere
+    compliance: hipaa
+  annotations:
+    description: "HashiCorp Vault — NeuroSphere secret management (HIPAA-compliant)"
+    iec62304.class: "C"
+    hipaa.controls: "164.312(a)(1),164.312(b),164.312(d),164.312(e)(1)"
+spec:
+  replicas: 1  # Single replica for dev; use 3+ with Raft for production HA
+  selector:
+    matchLabels:
+      app: vault
+  strategy:
+    type: Recreate  # Vault uses file storage; cannot run multiple replicas
+  template:
+    metadata:
+      labels:
+        app: vault
+        component: secrets-management
+        part-of: neurosphere
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8200"
+        prometheus.io/path: "/v1/sys/metrics"
+    spec:
+      serviceAccountName: vault
+      terminationGracePeriodSeconds: 30
+
+      # -------------------------------------------------------------------
+      # Security Context
+      # -------------------------------------------------------------------
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      # -------------------------------------------------------------------
+      # Init Container — Set permissions on data/audit directories
+      # -------------------------------------------------------------------
+      initContainers:
+        - name: vault-init-permissions
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /vault/data /vault/audit /vault/init
+              chown -R 100:1000 /vault/data /vault/audit /vault/init
+              chmod 700 /vault/data /vault/audit /vault/init
+          volumeMounts:
+            - name: vault-data
+              mountPath: /vault/data
+            - name: vault-audit
+              mountPath: /vault/audit
+            - name: vault-init
+              mountPath: /vault/init
+          securityContext:
+            runAsUser: 0
+
+      # -------------------------------------------------------------------
+      # Vault Server Container
+      # -------------------------------------------------------------------
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.15
+          imagePullPolicy: IfNotPresent
+
+          command:
+            - vault
+            - server
+            - -config=/vault/config/vault-config.hcl
+
+          ports:
+            - name: vault-api
+              containerPort: 8200
+              protocol: TCP
+            - name: vault-cluster
+              containerPort: 8201
+              protocol: TCP
+
+          env:
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8200"
+            - name: VAULT_API_ADDR
+              value: "http://$(POD_IP):8200"
+            - name: VAULT_CLUSTER_ADDR
+              value: "https://$(POD_IP):8201"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: VAULT_LOG_LEVEL
+              value: "info"
+            # Skip memory lock check if IPC_LOCK is not available
+            - name: SKIP_SETCAP
+              value: "true"
+
+          # -----------------------------------------------------------------
+          # Resource Limits
+          # -----------------------------------------------------------------
+          # Vault is memory-sensitive; ensure adequate allocation for
+          # secret caching and lease management. Monitor prometheus
+          # metrics for right-sizing in production.
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+          # -----------------------------------------------------------------
+          # Security Context — IPC_LOCK
+          # -----------------------------------------------------------------
+          # IPC_LOCK prevents Vault's memory (containing secrets) from
+          # being swapped to disk. Critical for HIPAA compliance.
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+
+          # -----------------------------------------------------------------
+          # Health Probes
+          # -----------------------------------------------------------------
+          # Vault health endpoint returns:
+          #   200 — initialized, unsealed, active
+          #   429 — unsealed, standby
+          #   472 — data recovery mode replication secondary
+          #   473 — performance standby
+          #   501 — not initialized
+          #   503 — sealed
+          livenessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&uninitcode=200&sealedcode=200
+              port: 8200
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true
+              port: 8200
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          # -----------------------------------------------------------------
+          # Volume Mounts
+          # -----------------------------------------------------------------
+          volumeMounts:
+            - name: vault-config
+              mountPath: /vault/config
+              readOnly: true
+            - name: vault-data
+              mountPath: /vault/data
+            - name: vault-audit
+              mountPath: /vault/audit
+            - name: vault-init
+              mountPath: /vault/init
+            # Uncomment for TLS in production:
+            # - name: vault-tls
+            #   mountPath: /vault/tls
+            #   readOnly: true
+
+      # -------------------------------------------------------------------
+      # Volumes
+      # -------------------------------------------------------------------
+      volumes:
+        - name: vault-config
+          configMap:
+            name: vault-config
+        - name: vault-data
+          persistentVolumeClaim:
+            claimName: vault-data-pvc
+        - name: vault-audit
+          persistentVolumeClaim:
+            claimName: vault-audit-pvc
+        - name: vault-init
+          emptyDir:
+            medium: Memory  # Unseal keys in tmpfs — never written to disk
+            sizeLimit: 10Mi
+        # Uncomment for TLS in production:
+        # - name: vault-tls
+        #   secret:
+        #     secretName: vault-tls-cert
+
+---
+# =============================================================================
+# Persistent Volume Claims
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vault-data-pvc
+  namespace: neurosphere-vault
+  labels:
+    app: vault
+    component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard  # Adjust for your cluster (gp3, premium-rwo, etc.)
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vault-audit-pvc
+  namespace: neurosphere-vault
+  labels:
+    app: vault
+    component: audit-storage
+  annotations:
+    description: "HIPAA audit log storage — minimum 6-year retention"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi  # Audit logs grow fast; monitor and expand as needed
+  storageClassName: standard

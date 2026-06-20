@@ -1,0 +1,29 @@
+# =============================================================================
+# NeuroSphere — Telemetry Ingest Service (ClusterIP)
+# =============================================================================
+# Internal service endpoint for the Telemetry Ingest pipeline.
+# Receives high-frequency sensor data from surgical robot controllers.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-ingest-service
+  namespace: neurosphere-core
+  labels:
+    app: telemetry-ingest-service
+    tier: backend
+    domain: telemetry
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "Internal endpoint for surgical robot telemetry ingestion"
+spec:
+  type: ClusterIP
+  selector:
+    app: telemetry-ingest-service
+  ports:
+    - name: http
+      port: 5002
+      targetPort: 5002
+      protocol: TCP

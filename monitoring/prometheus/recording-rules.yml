@@ -1,0 +1,157 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Prometheus Recording Rules
+# =============================================================================
+# Pre-computed metrics to accelerate Grafana dashboard queries and reduce
+# load on Prometheus during peak dashboard usage.
+# =============================================================================
+
+groups:
+  # =========================================================================
+  # Robot Command Latency Percentiles
+  # =========================================================================
+  - name: neurosphere_robot_command_latency
+    interval: 15s
+    rules:
+      - record: neurosphere:robot_command_latency:p50
+        expr: >-
+          histogram_quantile(0.50,
+            sum by (le) (
+              rate(robot_command_duration_seconds_bucket[5m])
+            )
+          )
+        labels:
+          quantile: "0.50"
+
+      - record: neurosphere:robot_command_latency:p95
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le) (
+              rate(robot_command_duration_seconds_bucket[5m])
+            )
+          )
+        labels:
+          quantile: "0.95"
+
+      - record: neurosphere:robot_command_latency:p99
+        expr: >-
+          histogram_quantile(0.99,
+            sum by (le) (
+              rate(robot_command_duration_seconds_bucket[5m])
+            )
+          )
+        labels:
+          quantile: "0.99"
+
+  # =========================================================================
+  # Service Throughput Rates
+  # =========================================================================
+  - name: neurosphere_throughput
+    interval: 15s
+    rules:
+      - record: neurosphere:diagnostic_throughput:rate5m
+        expr: >-
+          sum(rate(diagnostic_scans_processed_total[5m]))
+
+      - record: neurosphere:patient_alert_rate:rate5m
+        expr: >-
+          sum(rate(patient_clinical_alerts_total[5m]))
+
+      - record: neurosphere:patient_alert_rate_by_severity:rate5m
+        expr: >-
+          sum by (severity) (rate(patient_clinical_alerts_total[5m]))
+
+      - record: neurosphere:telemetry_ingest_rate:rate5m
+        expr: >-
+          sum(rate(telemetry_messages_ingested_total[5m]))
+
+      - record: neurosphere:robot_commands_rate:rate5m
+        expr: >-
+          sum(rate(robot_commands_total[5m]))
+
+      - record: neurosphere:robot_commands_by_type:rate5m
+        expr: >-
+          sum by (command_type) (rate(robot_commands_total[5m]))
+
+  # =========================================================================
+  # Service Error Rates (ratio of 5xx to total requests)
+  # =========================================================================
+  - name: neurosphere_error_rates
+    interval: 15s
+    rules:
+      - record: neurosphere:service_error_rate:ratio_rate5m
+        expr: >-
+          sum by (service) (
+            rate(http_requests_total{status=~"5.."}[5m])
+          )
+          /
+          sum by (service) (
+            rate(http_requests_total[5m])
+          )
+
+      - record: neurosphere:service_client_error_rate:ratio_rate5m
+        expr: >-
+          sum by (service) (
+            rate(http_requests_total{status=~"4.."}[5m])
+          )
+          /
+          sum by (service) (
+            rate(http_requests_total[5m])
+          )
+
+  # =========================================================================
+  # Service Availability (ratio of successful scrapes)
+  # =========================================================================
+  - name: neurosphere_availability
+    interval: 15s
+    rules:
+      - record: neurosphere:service_availability:ratio_rate5m
+        expr: >-
+          avg_over_time(up[5m])
+
+      - record: neurosphere:service_availability_by_service:ratio_rate5m
+        expr: >-
+          avg by (job) (avg_over_time(up[5m]))
+
+  # =========================================================================
+  # HTTP Request Latency Percentiles (per service)
+  # =========================================================================
+  - name: neurosphere_http_latency
+    interval: 15s
+    rules:
+      - record: neurosphere:http_latency_p50:rate5m
+        expr: >-
+          histogram_quantile(0.50,
+            sum by (le, service) (
+              rate(http_request_duration_seconds_bucket[5m])
+            )
+          )
+
+      - record: neurosphere:http_latency_p95:rate5m
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, service) (
+              rate(http_request_duration_seconds_bucket[5m])
+            )
+          )
+
+      - record: neurosphere:http_latency_p99:rate5m
+        expr: >-
+          histogram_quantile(0.99,
+            sum by (le, service) (
+              rate(http_request_duration_seconds_bucket[5m])
+            )
+          )
+
+  # =========================================================================
+  # Resource Utilization (for capacity planning dashboards)
+  # =========================================================================
+  - name: neurosphere_resources
+    interval: 30s
+    rules:
+      - record: neurosphere:memory_usage_percent:ratio
+        expr: >-
+          (container_memory_usage_bytes / container_spec_memory_limit_bytes) * 100
+
+      - record: neurosphere:cpu_usage_percent:rate5m
+        expr: >-
+          rate(container_cpu_usage_seconds_total[5m]) * 100

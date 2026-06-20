@@ -1,0 +1,276 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Prometheus Alert Rules
+# =============================================================================
+# Alert severity hierarchy (maps to Alertmanager routing):
+#   critical  → PagerDuty immediate page, 2-5 min repeat
+#   high      → PagerDuty high-urgency, 10 min repeat
+#   warning   → Slack channel, 30 min repeat
+# =============================================================================
+
+groups:
+  # =========================================================================
+  # GROUP: patient_safety — HIGHEST PRIORITY
+  # Patient monitoring failures require immediate clinical intervention.
+  # =========================================================================
+  - name: patient_safety
+    rules:
+      - alert: PatientMonitorDown
+        expr: up{job="patient-monitor-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          domain: patient-monitoring
+          compliance: hipaa
+        annotations:
+          summary: "Patient monitoring system OFFLINE"
+          description: >-
+            Patient monitoring service has been unreachable for more than
+            1 minute. Immediate clinical intervention required — bedside
+            monitors may not be transmitting vitals to the central dashboard.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/patient-monitor-down"
+          clinical_impact: "Vital signs surveillance interrupted for all connected patients"
+
+      - alert: PatientVitalsAnomalyHigh
+        expr: >-
+          rate(patient_vitals_anomalies_total[5m])
+          /
+          (rate(patient_vitals_readings_total[5m]) > 0)
+          > 0.15
+        for: 5m
+        labels:
+          severity: critical
+          domain: patient-monitoring
+          compliance: hipaa
+        annotations:
+          summary: "Patient vitals anomaly rate exceeds 15%"
+          description: >-
+            More than 15% of patient vitals readings are flagged as anomalous
+            over the last 5 minutes. This may indicate sensor malfunction,
+            environmental interference, or a genuine multi-patient clinical event.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/vitals-anomaly-high"
+          clinical_impact: "Potential mass false-alarm fatigue or missed critical events"
+
+      - alert: HighPatientAlertRate
+        expr: >-
+          rate(patient_clinical_alerts_total{severity="critical"}[1m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          domain: patient-monitoring
+        annotations:
+          summary: "High rate of critical patient alerts (>10/min)"
+          description: >-
+            More than 10 critical clinical alerts are being generated per minute.
+            Verify whether this is a genuine clinical surge or a monitoring
+            system malfunction causing alert storms.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/high-alert-rate"
+
+  # =========================================================================
+  # GROUP: surgical_robotics — CRITICAL
+  # Surgical robot control plane must be ultra-reliable during procedures.
+  # =========================================================================
+  - name: surgical_robotics
+    rules:
+      - alert: RobotCommandServiceDown
+        expr: up{job="robot-command-service"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          domain: surgical-robotics
+        annotations:
+          summary: "Surgical robot control plane OFFLINE"
+          description: >-
+            Robot command service is unreachable. If surgical procedures are
+            in progress, initiate emergency manual-override protocol immediately.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/robot-command-down"
+          clinical_impact: "All robotic-assisted surgeries may lose automated guidance"
+
+      - alert: RobotCommandLatencyHigh
+        expr: >-
+          histogram_quantile(0.99,
+            rate(robot_command_duration_seconds_bucket[5m])
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          domain: surgical-robotics
+        annotations:
+          summary: "Robot command p99 latency exceeds 500ms"
+          description: >-
+            The 99th-percentile latency for robot command execution has exceeded
+            500ms for 5 minutes. Surgical precision may be degraded at this
+            latency. Investigate network, service load, or hardware issues.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/robot-latency-high"
+
+      - alert: ActiveProceduresWithHighLatency
+        expr: >-
+          robot_active_procedures > 0
+          and
+          histogram_quantile(0.99,
+            rate(robot_command_duration_seconds_bucket[5m])
+          ) > 0.2
+        for: 2m
+        labels:
+          severity: critical
+          domain: surgical-robotics
+        annotations:
+          summary: "Active surgical procedures with degraded robot latency"
+          description: >-
+            There are active surgical procedures in progress AND robot command
+            latency (p99) exceeds 200ms. This combination poses a direct risk
+            to patient safety during robotic-assisted surgery.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/active-procedure-latency"
+          clinical_impact: "Real-time surgical guidance may be delayed beyond safe thresholds"
+
+      - alert: RobotOffline
+        expr: robot_heartbeat_status == 0
+        for: 2m
+        labels:
+          severity: warning
+          domain: surgical-robotics
+        annotations:
+          summary: "Surgical robot heartbeat lost"
+          description: >-
+            Robot heartbeat signal has been absent for more than 2 minutes.
+            The robot may be powered off, disconnected, or experiencing a
+            firmware fault. Verify physical robot status.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/robot-offline"
+
+  # =========================================================================
+  # GROUP: diagnostics — HIGH
+  # Diagnostic engine delays impact clinical decision timelines.
+  # =========================================================================
+  - name: diagnostics
+    rules:
+      - alert: DiagnosticQueueBacklog
+        expr: diagnostic_queue_depth > 50
+        for: 10m
+        labels:
+          severity: warning
+          domain: diagnostics
+        annotations:
+          summary: "Diagnostic processing queue backlog exceeds 50 items"
+          description: >-
+            The diagnostic engine queue has more than 50 pending items for
+            over 10 minutes. Radiologists and clinicians may experience delayed
+            AI-assisted diagnostic results.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/diagnostic-queue-backlog"
+
+      - alert: DiagnosticEngineDown
+        expr: up{job="diagnostic-engine-service"} == 0
+        for: 2m
+        labels:
+          severity: high
+          domain: diagnostics
+        annotations:
+          summary: "Diagnostic engine service OFFLINE"
+          description: >-
+            The AI diagnostic engine has been unreachable for more than 2 minutes.
+            Automated pathology screening, imaging analysis, and triage scoring
+            are unavailable. Clinicians must rely on manual review.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/diagnostic-engine-down"
+
+      - alert: DiagnosticAccuracyLow
+        expr: >-
+          diagnostic_accuracy_rate < 0.90
+        for: 10m
+        labels:
+          severity: warning
+          domain: diagnostics
+        annotations:
+          summary: "Diagnostic accuracy rate below 90%"
+          description: >-
+            The diagnostic engine's accuracy metric has dropped below the 90%
+            threshold. Model drift, data quality issues, or upstream sensor
+            calibration problems may be contributing factors.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/diagnostic-accuracy-low"
+
+  # =========================================================================
+  # GROUP: infrastructure — STANDARD
+  # Platform-level health: resource usage, service availability, error rates.
+  # =========================================================================
+  - name: infrastructure
+    rules:
+      - alert: HighMemoryUsage
+        expr: >-
+          (container_memory_usage_bytes
+          /
+          container_spec_memory_limit_bytes) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          domain: infrastructure
+        annotations:
+          summary: "Container memory usage exceeds 85%"
+          description: >-
+            Container {{ $labels.name }} is using more than 85% of its memory
+            limit for over 5 minutes. Risk of OOM-kill and service disruption.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/high-memory"
+
+      - alert: HighCPUUsage
+        expr: >-
+          rate(container_cpu_usage_seconds_total[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          domain: infrastructure
+        annotations:
+          summary: "Container CPU usage exceeds 80%"
+          description: >-
+            Container {{ $labels.name }} CPU utilization has exceeded 80%
+            for over 5 minutes. Service response times may be degraded.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/high-cpu"
+
+      - alert: TelemetryIngestDown
+        expr: up{job="telemetry-ingest-service"} == 0
+        for: 2m
+        labels:
+          severity: high
+          domain: telemetry
+        annotations:
+          summary: "Telemetry ingest service OFFLINE"
+          description: >-
+            The telemetry ingestion pipeline has been down for more than
+            2 minutes. Device telemetry data (robot sensors, patient monitors,
+            environmental sensors) is not being collected.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/telemetry-ingest-down"
+
+      - alert: HighErrorRate
+        expr: >-
+          sum by (service) (
+            rate(http_requests_total{status=~"5.."}[5m])
+          )
+          /
+          sum by (service) (
+            rate(http_requests_total[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          domain: infrastructure
+        annotations:
+          summary: "HTTP 5xx error rate exceeds 5% for {{ $labels.service }}"
+          description: >-
+            Service {{ $labels.service }} is returning server errors at a rate
+            above 5% of total requests. Investigate application logs and
+            downstream dependencies.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/high-error-rate"
+
+      - alert: ServiceResponseSlow
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, service) (
+              rate(http_request_duration_seconds_bucket[5m])
+            )
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          domain: infrastructure
+        annotations:
+          summary: "Service p95 latency exceeds 2 seconds for {{ $labels.service }}"
+          description: >-
+            The 95th-percentile response time for {{ $labels.service }} has
+            exceeded 2 seconds for over 5 minutes. User experience and
+            downstream service SLAs may be impacted.
+          runbook_url: "https://wiki.neurosphere.io/runbooks/slow-response"

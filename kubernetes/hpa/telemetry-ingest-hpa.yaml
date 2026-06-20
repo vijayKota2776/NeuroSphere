@@ -1,0 +1,50 @@
+# =============================================================================
+# HorizontalPodAutoscaler: telemetry-ingest-service
+# =============================================================================
+# Handles high-throughput telemetry ingestion from robotic instruments,
+# environmental sensors, and patient monitoring devices.
+# Aggressive scale-up to handle telemetry bursts (e.g., during simultaneous
+# multi-robot procedures or sensor calibration cycles).
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: telemetry-ingest-hpa
+  namespace: neurosphere-core
+  labels:
+    app: telemetry-ingest-service
+    component: autoscaling
+    part-of: neurosphere
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: telemetry-ingest-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    # CPU target 70% — telemetry parsing and validation is CPU-moderate
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        # Handle telemetry bursts: allow 3 pods per 60s scale-up
+        # Bursts occur during multi-robot procedure startups and
+        # high-frequency sensor calibration windows
+        - type: Pods
+          value: 3
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+      selectPolicy: Min

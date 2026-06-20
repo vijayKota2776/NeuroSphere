@@ -1,0 +1,32 @@
+# =============================================================================
+# NeuroSphere — API Gateway Service (LoadBalancer)
+# =============================================================================
+# External-facing LoadBalancer service for the NeuroSphere API Gateway.
+# Uses AWS Network Load Balancer (NLB) for low-latency, high-throughput
+# traffic handling required by real-time surgical robotics telemetry.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: neurosphere-gateway
+  namespace: neurosphere-core
+  labels:
+    app: neurosphere-gateway
+    tier: frontend
+    domain: api-gateway
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "External-facing gateway — routes traffic to NeuroSphere core services"
+    # -- AWS NLB annotation for production deployment --
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+spec:
+  type: LoadBalancer
+  selector:
+    app: neurosphere-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP

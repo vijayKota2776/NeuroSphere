@@ -1,0 +1,24 @@
+# =============================================================================
+# PodDisruptionBudget: patient-monitor-service
+# =============================================================================
+# CRITICAL — Patient monitoring must never drop below 2 available pods.
+# Patient vitals monitoring is life-safety critical; losing monitoring
+# coverage during maintenance is unacceptable. minAvailable=2 ensures
+# redundant monitoring capacity at all times.
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: patient-monitor-pdb
+  namespace: neurosphere-core
+  labels:
+    app: patient-monitor-service
+    component: disruption-budget
+    part-of: neurosphere
+    criticality: high
+spec:
+  # Higher minAvailable than other services — patient safety requirement
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: patient-monitor-service

@@ -1,0 +1,55 @@
+# =============================================================================
+# NeuroSphere — Shared ConfigMap for Core Services
+# =============================================================================
+# Centralized configuration for all microservices in the neurosphere-core
+# namespace. Environment-specific values are injected into pods via envFrom
+# or individual env references in deployment manifests.
+#
+# Configuration categories:
+#   - Service discovery and mesh settings
+#   - Logging and observability
+#   - Runtime environment flags
+#   - Patient monitoring parameters
+#   - Telemetry pipeline tuning
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neurosphere-config
+  namespace: neurosphere-core
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    tier: application
+  annotations:
+    description: "Shared configuration for NeuroSphere core microservices"
+    compliance-scope: "Non-sensitive runtime configuration only — no secrets"
+data:
+  # ---------------------------------------------------------------------------
+  # Service Discovery
+  # ---------------------------------------------------------------------------
+  SERVICE_DISCOVERY_ENABLED: "true"
+
+  # ---------------------------------------------------------------------------
+  # Logging & Observability
+  # ---------------------------------------------------------------------------
+  LOG_LEVEL: "INFO"                     # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  METRICS_ENABLED: "true"              # Enable Prometheus metrics exposition
+
+  # ---------------------------------------------------------------------------
+  # Runtime Environment
+  # ---------------------------------------------------------------------------
+  FLASK_ENV: "production"              # Flask environment for Python services
+  NODE_ENV: "production"               # Node.js environment for JS services
+
+  # ---------------------------------------------------------------------------
+  # Patient Monitoring Parameters
+  # ---------------------------------------------------------------------------
+  ANOMALY_RATE: "0.05"                 # Probability threshold for vitals anomaly simulation (5%)
+  VITALS_UPDATE_INTERVAL: "3"          # Seconds between patient vitals updates
+
+  # ---------------------------------------------------------------------------
+  # Telemetry Pipeline
+  # ---------------------------------------------------------------------------
+  TELEMETRY_BUFFER_SIZE: "10000"       # Max events buffered before flush to storage

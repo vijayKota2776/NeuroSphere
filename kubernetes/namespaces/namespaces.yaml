@@ -1,0 +1,84 @@
+# =============================================================================
+# NeuroSphere Medical Robotics Platform — Namespace Definitions
+# =============================================================================
+# Defines isolated namespaces for the NeuroSphere surgical robotics platform.
+# Each namespace enforces logical separation aligned with healthcare compliance
+# requirements (HIPAA, IEC-62443, FDA SaMD).
+#
+# Namespaces:
+#   neurosphere-core     — Primary application microservices
+#   neurosphere-monitor  — Observability stack (Prometheus, Grafana)
+#   neurosphere-logging  — Centralized logging (ELK)
+#   neurosphere-vault    — Secrets management (HashiCorp Vault)
+#   neurosphere-ingress  — Edge / ingress routing
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurosphere-core
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    tier: application
+    compliance: hipaa-iec62443
+  annotations:
+    description: "Core application services for NeuroSphere surgical robotics platform"
+    contact: "neurosphere-platform-team@neurosphere.health"
+    compliance-scope: "HIPAA, IEC-62443, FDA SaMD"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurosphere-monitor
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    tier: monitoring
+    compliance: operational
+  annotations:
+    description: "Monitoring and observability stack — Prometheus, Grafana, Alertmanager"
+    contact: "neurosphere-sre-team@neurosphere.health"
+    compliance-scope: "Operational monitoring for medical device telemetry"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurosphere-logging
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    tier: logging
+    compliance: hipaa-audit
+  annotations:
+    description: "Centralized logging via ELK stack — audit trail for regulatory compliance"
+    contact: "neurosphere-sre-team@neurosphere.health"
+    compliance-scope: "HIPAA audit logging, IEC-62443 event traceability"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurosphere-vault
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    tier: security
+    compliance: hipaa-encryption
+  annotations:
+    description: "HashiCorp Vault for secrets management — encryption keys, PKI, credentials"
+    contact: "neurosphere-security-team@neurosphere.health"
+    compliance-scope: "HIPAA encryption at rest, IEC-62443 credential management"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurosphere-ingress
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    tier: edge
+    compliance: network-perimeter
+  annotations:
+    description: "Ingress controller namespace — TLS termination and external traffic routing"
+    contact: "neurosphere-platform-team@neurosphere.health"
+    compliance-scope: "Network perimeter security, TLS enforcement"

@@ -1,0 +1,112 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Prometheus Configuration
+# =============================================================================
+# Centralized metrics collection for surgical robotics, patient monitoring,
+# diagnostic imaging, and telemetry ingestion services.
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    cluster: neurosphere
+    environment: '${ENVIRONMENT:-dev}'
+
+# ---------------------------------------------------------------------------
+# Rule files — evaluated at every evaluation_interval
+# ---------------------------------------------------------------------------
+rule_files:
+  - "alert-rules.yml"
+  - "recording-rules.yml"
+
+# ---------------------------------------------------------------------------
+# Alertmanager targets
+# ---------------------------------------------------------------------------
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093"
+      scheme: http
+      timeout: 10s
+
+# ---------------------------------------------------------------------------
+# Scrape configurations
+# ---------------------------------------------------------------------------
+scrape_configs:
+
+  # ---- Prometheus self-monitoring ----
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: prometheus
+          tier: monitoring
+
+  # ---- Node Exporter (host-level system metrics) ----
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          tier: infrastructure
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "node_(cpu|memory|disk|network|filesystem).*"
+        action: keep
+
+  # ---- Robot Command Service (surgical robotics control plane) ----
+  - job_name: "robot-command-service"
+    metrics_path: /metrics
+    scrape_interval: 10s          # tighter interval for safety-critical service
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["robot-command-service:5000"]
+        labels:
+          service: robot-command-service
+          tier: critical
+          domain: surgical-robotics
+
+  # ---- Diagnostic Engine Service (AI/ML diagnostic analysis) ----
+  - job_name: "diagnostic-engine-service"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["diagnostic-engine-service:3000"]
+        labels:
+          service: diagnostic-engine-service
+          tier: high
+          domain: diagnostics
+
+  # ---- Patient Monitor Service (real-time vitals surveillance) ----
+  - job_name: "patient-monitor-service"
+    metrics_path: /metrics
+    scrape_interval: 10s          # tighter interval for patient safety
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["patient-monitor-service:5001"]
+        labels:
+          service: patient-monitor-service
+          tier: critical
+          domain: patient-monitoring
+
+  # ---- Telemetry Ingest Service (device telemetry pipeline) ----
+  - job_name: "telemetry-ingest-service"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["telemetry-ingest-service:5002"]
+        labels:
+          service: telemetry-ingest-service
+          tier: high
+          domain: telemetry
+
+  # ---- NeuroSphere API Gateway ----
+  - job_name: "neurosphere-gateway"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["neurosphere-gateway:80"]
+        labels:
+          service: neurosphere-gateway
+          tier: standard
+          domain: gateway
+    # Gateway may not always expose metrics; tolerate scrape failures
+    honor_labels: true

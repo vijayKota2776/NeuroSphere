@@ -1,0 +1,260 @@
+# ============================================================================
+# NeuroSphere — Docker Compose Orchestration
+# Global Autonomous Medical Robotics Operations Platform
+#
+# Usage:
+#   docker-compose up --build        Start all services
+#   docker-compose up -d             Start in detached mode
+#   docker-compose ps                View running services
+#   docker-compose logs -f           Follow logs
+# ============================================================================
+
+
+services:
+  # -----------------------------------------------------------------------
+  # Robot Command Service (Python / Flask)
+  # Handles surgical robot motion commands, safety interlocks, and state mgmt
+  # -----------------------------------------------------------------------
+  robot-command-service:
+    build:
+      context: ./services/robot-command-service
+      dockerfile: Dockerfile
+    container_name: neurosphere-robot-command
+    restart: unless-stopped
+    ports:
+      - "5050:5000"
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SERVICE_NAME=robot-command-service
+      - TELEMETRY_SERVICE_URL=http://telemetry-ingest-service:5002
+      - PATIENT_SERVICE_URL=http://patient-monitor-service:5001
+      - MAX_ROBOT_VELOCITY=${MAX_ROBOT_VELOCITY:-0.05}
+      - SAFETY_INTERLOCK_ENABLED=${SAFETY_INTERLOCK_ENABLED:-true}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+    labels:
+      - "com.neurosphere.service=robot-command"
+      - "com.neurosphere.tier=backend"
+      - "com.neurosphere.domain=surgical-robotics"
+      - "com.neurosphere.compliance=IEC-62443"
+
+  # -----------------------------------------------------------------------
+  # Diagnostic Engine Service (Node.js / Express)
+  # AI-powered diagnostic analysis, imaging pipelines, report generation
+  # -----------------------------------------------------------------------
+  diagnostic-engine-service:
+    build:
+      context: ./services/diagnostic-engine-service
+      dockerfile: Dockerfile
+    container_name: neurosphere-diagnostic-engine
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SERVICE_NAME=diagnostic-engine-service
+      - PATIENT_SERVICE_URL=http://patient-monitor-service:5001
+      - MODEL_CONFIDENCE_THRESHOLD=${MODEL_CONFIDENCE_THRESHOLD:-0.85}
+      - MAX_CONCURRENT_ANALYSES=${MAX_CONCURRENT_ANALYSES:-4}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    labels:
+      - "com.neurosphere.service=diagnostic-engine"
+      - "com.neurosphere.tier=backend"
+      - "com.neurosphere.domain=diagnostics"
+      - "com.neurosphere.compliance=FDA-SaMD"
+
+  # -----------------------------------------------------------------------
+  # Patient Monitor Service (Python / Flask)
+  # Real-time patient vitals monitoring, alerting, and EHR integration
+  # -----------------------------------------------------------------------
+  patient-monitor-service:
+    build:
+      context: ./services/patient-monitor-service
+      dockerfile: Dockerfile
+    container_name: neurosphere-patient-monitor
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SERVICE_NAME=patient-monitor-service
+      - TELEMETRY_SERVICE_URL=http://telemetry-ingest-service:5002
+      - VITALS_ALERT_ENABLED=${VITALS_ALERT_ENABLED:-true}
+      - HEART_RATE_CRITICAL_LOW=${HEART_RATE_CRITICAL_LOW:-40}
+      - HEART_RATE_CRITICAL_HIGH=${HEART_RATE_CRITICAL_HIGH:-180}
+      - SPO2_CRITICAL_LOW=${SPO2_CRITICAL_LOW:-88}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+    labels:
+      - "com.neurosphere.service=patient-monitor"
+      - "com.neurosphere.tier=backend"
+      - "com.neurosphere.domain=patient-care"
+      - "com.neurosphere.compliance=HIPAA"
+
+  # -----------------------------------------------------------------------
+  # Telemetry Ingest Service (Python / Flask)
+  # High-throughput ingestion of robot telemetry, sensor data, and metrics
+  # -----------------------------------------------------------------------
+  telemetry-ingest-service:
+    build:
+      context: ./services/telemetry-ingest-service
+      dockerfile: Dockerfile
+    container_name: neurosphere-telemetry-ingest
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SERVICE_NAME=telemetry-ingest-service
+      - INGEST_BATCH_SIZE=${INGEST_BATCH_SIZE:-100}
+      - INGEST_FLUSH_INTERVAL_MS=${INGEST_FLUSH_INTERVAL_MS:-5000}
+      - MAX_TELEMETRY_AGE_SECONDS=${MAX_TELEMETRY_AGE_SECONDS:-300}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5002/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 384M
+        reservations:
+          cpus: "0.15"
+          memory: 96M
+    labels:
+      - "com.neurosphere.service=telemetry-ingest"
+      - "com.neurosphere.tier=backend"
+      - "com.neurosphere.domain=telemetry"
+      - "com.neurosphere.compliance=IEC-62443"
+
+  # -----------------------------------------------------------------------
+  # NeuroSphere API Gateway (Nginx)
+  # Reverse proxy, rate limiting, CORS, audit logging, request tracing
+  # -----------------------------------------------------------------------
+  neurosphere-gateway:
+    build:
+      context: ./services/neurosphere-gateway
+      dockerfile: Dockerfile
+    container_name: neurosphere-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_HOST_PORT:-8080}:80"
+    environment:
+      - NGINX_ENTRYPOINT_QUIET_LOGS=${NGINX_QUIET_LOGS:-0}
+    depends_on:
+      robot-command-service:
+        condition: service_healthy
+      diagnostic-engine-service:
+        condition: service_healthy
+      patient-monitor-service:
+        condition: service_healthy
+      telemetry-ingest-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+    labels:
+      - "com.neurosphere.service=api-gateway"
+      - "com.neurosphere.tier=edge"
+      - "com.neurosphere.domain=networking"
+
+  # -----------------------------------------------------------------------
+  # NeuroSphere Frontend Dashboard
+  # Real-time command center UI for medical robotics operations
+  # -----------------------------------------------------------------------
+  neurosphere-dashboard:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: neurosphere-dashboard
+    restart: unless-stopped
+    ports:
+      - "3333:80"
+    depends_on:
+      robot-command-service:
+        condition: service_healthy
+      patient-monitor-service:
+        condition: service_healthy
+      diagnostic-engine-service:
+        condition: service_healthy
+      telemetry-ingest-service:
+        condition: service_healthy
+    networks:
+      - neurosphere-network
+    labels:
+      - "com.neurosphere.service=dashboard"
+      - "com.neurosphere.tier=frontend"
+
+# =========================================================================
+# Networks
+# =========================================================================
+networks:
+  neurosphere-network:
+    driver: bridge
+    name: neurosphere-network
+    labels:
+      - "com.neurosphere.network=internal"

@@ -1,0 +1,122 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Local Jenkins Development Environment
+# =============================================================================
+# Spins up a Jenkins controller + custom agent for local pipeline development.
+#
+# Usage:
+#   docker compose -f docker-compose.jenkins.yml up -d --build
+#   docker compose -f docker-compose.jenkins.yml down -v   # full teardown
+#
+# Access Jenkins UI at: http://localhost:8080
+# Initial admin password: docker exec neurosphere-jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+#
+# NOTE: This setup mounts the Docker socket so the agent can build images.
+#       This is acceptable for local development but NOT for production —
+#       production agents should use Docker-in-Docker (DinD) or Kaniko.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Jenkins Controller
+  # ---------------------------------------------------------------------------
+  jenkins-controller:
+    image: jenkins/jenkins:lts
+    container_name: neurosphere-jenkins
+    restart: unless-stopped
+    ports:
+      - "8080:8080"       # Jenkins web UI
+      - "50000:50000"     # Agent JNLP port
+    volumes:
+      # Persist Jenkins home (jobs, credentials, plugins, config)
+      - jenkins_home:/var/jenkins_home
+      # Mount Docker socket for building images from controller (dev only)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount the project source for local pipeline testing
+      - ../../:/var/jenkins_home/workspace/neurosphere:ro
+    environment:
+      # Skip the initial setup wizard for automated bootstrap
+      JAVA_OPTS: >-
+        -Djenkins.install.runSetupWizard=false
+        -Dhudson.security.csrf.GlobalCrumbIssuerConfiguration.CRUMB_ISSUER=standard
+        -Xmx2g
+        -Xms512m
+      # Pre-install essential plugins via the official mechanism
+      JENKINS_OPTS: "--prefix=/"
+      CASC_JENKINS_CONFIG: /var/jenkins_home/casc_configs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - neurosphere-cicd
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # Jenkins Agent — custom image with NeuroSphere toolchain
+  # ---------------------------------------------------------------------------
+  jenkins-agent:
+    build:
+      context: .
+      dockerfile: jenkins-agent.Dockerfile
+    container_name: neurosphere-jenkins-agent
+    restart: unless-stopped
+    depends_on:
+      jenkins-controller:
+        condition: service_healthy
+    volumes:
+      # Docker socket so the agent can build/push images
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared workspace for build artefacts
+      - agent_workspace:/home/jenkins/agent/workspace
+      # Mount the project source
+      - ../../:/home/jenkins/agent/workspace/neurosphere:ro
+    environment:
+      JENKINS_URL: http://jenkins-controller:8080
+      JENKINS_AGENT_NAME: neurosphere-agent-1
+      # Secret must be retrieved from the Jenkins UI after first boot.
+      # Replace <AGENT_SECRET> once the agent node is created in Jenkins.
+      JENKINS_SECRET: "${JENKINS_AGENT_SECRET:-<AGENT_SECRET>}"
+      JENKINS_AGENT_WORKDIR: /home/jenkins/agent
+      # AWS credentials (sourced from host env for local dev)
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+    networks:
+      - neurosphere-cicd
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+
+# =============================================================================
+# Volumes — persistent storage
+# =============================================================================
+volumes:
+  jenkins_home:
+    driver: local
+    name: neurosphere_jenkins_home
+  agent_workspace:
+    driver: local
+    name: neurosphere_agent_workspace
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  neurosphere-cicd:
+    driver: bridge
+    name: neurosphere-cicd
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

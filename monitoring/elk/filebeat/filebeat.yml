@@ -1,0 +1,121 @@
+# ============================================================================
+# NeuroSphere — Filebeat Configuration
+# Docker Container Log Collection for Medical Robotics Platform
+#
+# Filebeat auto-discovers NeuroSphere containers via Docker provider,
+# enriches logs with container/host metadata, and ships to Logstash.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Autodiscovery — Automatically detect NeuroSphere containers
+# Uses Docker labels and container name patterns to identify services
+# ---------------------------------------------------------------------------
+filebeat.autodiscover:
+  providers:
+    - type: docker
+      hints.enabled: true
+      templates:
+        # Match all NeuroSphere platform containers
+        - condition:
+            contains:
+              docker.container.name: neurosphere
+          config:
+            - type: container
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              # Parse JSON-formatted Docker logs
+              json.keys_under_root: true
+              json.add_error_key: true
+              json.message_key: message
+              json.overwrite_keys: true
+              processors:
+                - add_docker_metadata: ~
+                - add_cloud_metadata: ~
+
+        # Match monitoring stack containers for self-monitoring
+        - condition:
+            contains:
+              docker.container.name: monitoring
+          config:
+            - type: container
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              processors:
+                - add_docker_metadata: ~
+
+# ---------------------------------------------------------------------------
+# Processors — Global enrichment applied to all events
+# ---------------------------------------------------------------------------
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+      match_fields: ["system.process.cgroup.id"]
+      match_pids: ["process.pid", "process.ppid"]
+      match_source: true
+      match_source_index: 4
+      match_short_id: true
+      cleanup_timeout: 60
+      labels.dedot: false
+  - add_cloud_metadata: ~
+
+  # Extract service name from container labels
+  - copy_fields:
+      fields:
+        - from: container.labels.com_neurosphere_service
+          to: service.name
+      fail_on_error: false
+      ignore_missing: true
+
+  # Add NeuroSphere platform tags
+  - add_tags:
+      tags: ["neurosphere", "medical-robotics", "healthcare"]
+      target: "platform.tags"
+
+  # Drop noisy health-check logs to reduce volume
+  - drop_event:
+      when:
+        and:
+          - contains:
+              message: "/health"
+          - contains:
+              message: "200"
+
+# ---------------------------------------------------------------------------
+# Output — Ship logs to Logstash for processing
+# ---------------------------------------------------------------------------
+output.logstash:
+  hosts: ["logstash:5044"]
+  bulk_max_size: 2048
+  # Load balance across multiple Logstash instances in production
+  loadbalance: true
+  # Retry on failure
+  backoff.init: 1s
+  backoff.max: 60s
+
+# ---------------------------------------------------------------------------
+# Logging — Filebeat's own logs
+# ---------------------------------------------------------------------------
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0640
+
+# ---------------------------------------------------------------------------
+# Monitoring — Report Filebeat metrics to Elasticsearch
+# ---------------------------------------------------------------------------
+monitoring.enabled: true
+monitoring.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+
+# ---------------------------------------------------------------------------
+# Queue — In-memory buffer for burst handling
+# ---------------------------------------------------------------------------
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 5s

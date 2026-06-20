@@ -1,0 +1,203 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Experiment: Node Drain
+# =============================================================================
+# Purpose:    Simulate a worker node failure by draining a random worker
+#             node. Validates that PodDisruptionBudgets (PDBs) are enforced
+#             and all NeuroSphere services maintain their minAvailable
+#             guarantees during node-level disruption.
+#
+# Risk Level: HIGH
+# Blast Radius: All pods on a single worker node
+# Expected Outcome:
+#   - Node is cordoned and drained (pods evicted gracefully)
+#   - PDBs prevent simultaneous eviction of too many replicas
+#   - All evicted pods are rescheduled to other available nodes
+#   - Services maintain minAvailable as defined in their PDBs:
+#       patient-monitor:     minAvailable: 2 (of 3)
+#       robot-command:       minAvailable: 1 (of 2)
+#       diagnostic-engine:   minAvailable: 1 (of 2)
+#       telemetry-ingest:    minAvailable: 2 (of 3)
+#       api-gateway:         minAvailable: 1 (of 2)
+#   - No service endpoint has zero ready pods at any point
+#   - Patient data remains accessible (PVs are node-independent)
+#   - Alert fires: "NodeDrained" within 30 seconds
+#
+# Architecture Context:
+#   Cluster: 5 worker nodes (m5.2xlarge equivalent)
+#   Pod anti-affinity: Services spread across nodes via topology constraints
+#   PVs: All persistent volumes use ReadWriteMany (EFS) or are replicated
+#   Node labels: neurosphere.io/role=worker, neurosphere.io/zone={a,b,c}
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - At least 3 healthy worker nodes available
+#   - Sufficient capacity on remaining nodes for rescheduled pods
+#   - No active surgical procedures
+#   - Steady-state validation passes
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PhysicalMachineChaos
+metadata:
+  name: neurosphere-node-drain
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: node-lifecycle
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/blast-radius: single-node
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Drains a random worker node to simulate node failure. Validates
+      PodDisruptionBudget enforcement and pod rescheduling. All
+      NeuroSphere services should maintain minAvailable replicas
+      throughout the drain and recovery process.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/node-drain
+    chaos.neurosphere.io/jira: NEURO-CHAOS-006
+    chaos.neurosphere.io/safety-gate: surgical-procedure-check
+    chaos.neurosphere.io/expected-alerts: >-
+      NodeDrained, PodEvicted, PodRescheduled
+    chaos.neurosphere.io/pdb-expectations: >-
+      All services must maintain minAvailable during drain.
+      If PDB blocks eviction, drain should wait (not force).
+spec:
+  action: stress-cpu
+  # Note: Chaos Mesh PhysicalMachineChaos has limited node-drain support.
+  # For full node drain simulation, use the workflow-based approach below.
+  mode: one
+  address:
+    - "auto-select"
+  duration: '10m'
+
+---
+# =============================================================================
+# Workflow-Based Node Drain (Preferred Approach)
+# =============================================================================
+# The Chaos Mesh Workflow below provides a more controlled node drain
+# simulation using a sequence of steps:
+# 1. Select a random worker node
+# 2. Cordon the node (prevent new scheduling)
+# 3. Drain the node (evict pods respecting PDBs)
+# 4. Wait and observe (validate rescheduling)
+# 5. Uncordon the node (restore normal operation)
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: neurosphere-node-drain-workflow
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: node-lifecycle
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Orchestrated node drain workflow that cordons, drains, observes,
+      and restores a worker node while validating PDB enforcement.
+spec:
+  entry: node-drain-sequence
+  templates:
+    # --- Main orchestration ---
+    - name: node-drain-sequence
+      templateType: Serial
+      deadline: '15m'
+      children:
+        - pre-drain-validation
+        - cordon-and-drain
+        - observe-rescheduling
+        - uncordon-node
+        - post-drain-validation
+
+    # --- Step 1: Pre-drain health check ---
+    - name: pre-drain-validation
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        timeoutSeconds: 10
+        failureThreshold: 1
+        successThreshold: 1
+      deadline: '30s'
+
+    # --- Step 2: Cordon and drain the node ---
+    - name: cordon-and-drain
+      templateType: Task
+      task:
+        # Uses a Kubernetes Job to run kubectl drain with PDB respect
+        container:
+          name: node-drain-executor
+          image: bitnami/kubectl:1.28
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Select a random worker node
+              NODE=$(kubectl get nodes -l neurosphere.io/role=worker \
+                --no-headers -o custom-columns=':metadata.name' | shuf -n 1)
+              echo "Selected node for drain: $NODE"
+
+              # Cordon the node
+              kubectl cordon "$NODE"
+              echo "Node cordoned: $NODE"
+
+              # Drain with PDB respect (will wait if PDB blocks eviction)
+              kubectl drain "$NODE" \
+                --ignore-daemonsets \
+                --delete-emptydir-data \
+                --grace-period=30 \
+                --timeout=300s \
+                --force=false
+              echo "Node drained: $NODE"
+
+              # Store node name for uncordon step
+              echo "$NODE" > /tmp/drained-node
+      deadline: '6m'
+
+    # --- Step 3: Observe pod rescheduling ---
+    - name: observe-rescheduling
+      templateType: Suspend
+      suspend:
+        duration: '5m'
+
+    # --- Step 4: Uncordon the node ---
+    - name: uncordon-node
+      templateType: Task
+      task:
+        container:
+          name: node-restore-executor
+          image: bitnami/kubectl:1.28
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Uncordon all cordoned nodes (safe: only our experiment cordoned one)
+              kubectl get nodes -o json | \
+                jq -r '.items[] | select(.spec.unschedulable==true) | .metadata.name' | \
+                xargs -I {} kubectl uncordon {}
+              echo "All cordoned nodes uncordoned"
+      deadline: '1m'
+
+    # --- Step 5: Post-drain validation ---
+    - name: post-drain-validation
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        timeoutSeconds: 10
+        failureThreshold: 1
+        successThreshold: 3
+      deadline: '2m'

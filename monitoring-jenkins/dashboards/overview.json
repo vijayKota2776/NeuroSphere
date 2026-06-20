@@ -1,0 +1,124 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
+      "id": 1, "type": "stat", "title": "Robot Commands",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "thresholds": { "steps": [{"color":"green","value":null}] } } },
+      "options": { "colorMode": "background_solid", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "robot_commands_total", "legendFormat": "Commands" }]
+    },
+    {
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 0 },
+      "id": 2, "type": "stat", "title": "Active Procedures",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "thresholds": { "steps": [{"color":"green","value":null}] } } },
+      "options": { "colorMode": "background_solid", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "active_procedures_total", "legendFormat": "Active" }]
+    },
+    {
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 0 },
+      "id": 3, "type": "stat", "title": "Patient Alerts",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "thresholds": { "steps": [{"color":"red","value":null}] } } },
+      "options": { "colorMode": "background_solid", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "patient_alerts_generated_total", "legendFormat": "Alerts" }]
+    },
+    {
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 0 },
+      "id": 4, "type": "stat", "title": "Diagnostic Scans",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "thresholds": { "steps": [{"color":"purple","value":null}] } } },
+      "options": { "colorMode": "background_solid", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "diagnostic_scans_total", "legendFormat": "Scans" }]
+    },
+    {
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 0 },
+      "id": 5, "type": "stat", "title": "AI Accuracy %",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "percentunit", "thresholds": { "steps": [{"color":"red","value":null},{"color":"yellow","value":0.9},{"color":"green","value":0.95}] } } },
+      "options": { "colorMode": "background_solid", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "diagnostic_accuracy_rate", "legendFormat": "Accuracy" }]
+    },
+    {
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 0 },
+      "id": 6, "type": "stat", "title": "Telemetry Events/s",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "super-light-blue" }, "thresholds": { "steps": [{"color":"green","value":null}] } } },
+      "options": { "colorMode": "background_solid", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "telemetry_events_per_second", "legendFormat": "Events/s" }]
+    },
+    {
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 5 },
+      "id": 10, "type": "timeseries", "title": "🤖 Robot Battery Levels",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 15 }, "unit": "percent", "min": 0, "max": 100 } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "robot_battery_level", "legendFormat": "{{robot_id}}" }]
+    },
+    {
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 5 },
+      "id": 11, "type": "timeseries", "title": "💓 Patient Heart Rates (bpm)",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "none", "min": 40, "max": 200 } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "patient_heart_rate", "legendFormat": "{{patient_id}}" }]
+    },
+    {
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 12 },
+      "id": 12, "type": "timeseries", "title": "🩸 Patient SpO₂ Levels (%)",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": {"mode": "line"} }, "unit": "percent", "min": 70, "max": 100, "thresholds": {"steps": [{"color":"red","value":null},{"color":"yellow","value":90},{"color":"green","value":95}]} } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "patient_spo2_level", "legendFormat": "{{patient_id}}" }]
+    },
+    {
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 12 },
+      "id": 13, "type": "timeseries", "title": "🌡️ Patient Temperature (°C)",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 }, "unit": "celsius", "min": 35, "max": 42 } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "patient_temperature_celsius", "legendFormat": "{{patient_id}}" }]
+    },
+    {
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 12 },
+      "id": 14, "type": "timeseries", "title": "📡 Telemetry Buffer & Errors",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 20 } } },
+      "targets": [
+        { "datasource": {"type":"prometheus"}, "expr": "telemetry_buffer_size", "legendFormat": "Buffer Size" },
+        { "datasource": {"type":"prometheus"}, "expr": "telemetry_errors_total", "legendFormat": "Errors" },
+        { "datasource": {"type":"prometheus"}, "expr": "telemetry_sources_active", "legendFormat": "Active Sources" }
+      ]
+    },
+    {
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 19 },
+      "id": 20, "type": "stat", "title": "Service Uptime",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{"color":"red","value":null},{"color":"green","value":1}] }, "mappings": [{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}] } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "datasource": {"type":"prometheus"}, "expr": "up{job=\"robot-command\"}", "legendFormat": "Robot Command" },
+        { "datasource": {"type":"prometheus"}, "expr": "up{job=\"patient-monitor\"}", "legendFormat": "Patient Monitor" },
+        { "datasource": {"type":"prometheus"}, "expr": "up{job=\"diagnostic-engine\"}", "legendFormat": "Diagnostic Engine" },
+        { "datasource": {"type":"prometheus"}, "expr": "up{job=\"telemetry-ingest\"}", "legendFormat": "Telemetry Ingest" }
+      ]
+    },
+    {
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 19 },
+      "id": 21, "type": "stat", "title": "Diagnostic Queue Depth",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{"color":"green","value":null},{"color":"yellow","value":5},{"color":"red","value":10}] } } },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "diagnostic_queue_depth", "legendFormat": "Queue" }]
+    },
+    {
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 19 },
+      "id": 22, "type": "stat", "title": "Critical Patients",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "thresholds": { "steps": [{"color":"green","value":null},{"color":"red","value":1}] } } },
+      "options": { "colorMode": "background_solid", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "datasource": {"type":"prometheus"}, "expr": "critical_patients_count", "legendFormat": "Critical" }]
+    },
+    {
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 19 },
+      "id": 23, "type": "timeseries", "title": "Memory Usage",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "bytes", "custom": { "lineWidth": 1, "fillOpacity": 10 } } },
+      "targets": [
+        { "datasource": {"type":"prometheus"}, "expr": "process_resident_memory_bytes{job=\"robot-command\"}", "legendFormat": "Robot Cmd" },
+        { "datasource": {"type":"prometheus"}, "expr": "process_resident_memory_bytes{job=\"patient-monitor\"}", "legendFormat": "Patient Mon" },
+        { "datasource": {"type":"prometheus"}, "expr": "process_resident_memory_bytes{job=\"telemetry-ingest\"}", "legendFormat": "Telemetry" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["neurosphere", "medical", "robotics"],
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "10s",
+  "title": "NeuroSphere — Medical Robotics Overview",
+  "uid": "neurosphere-overview"
+}

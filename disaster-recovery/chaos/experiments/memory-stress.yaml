@@ -1,0 +1,122 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Experiment: Memory Stress
+# =============================================================================
+# Purpose:    Fill telemetry-ingest pods to 90% of their memory limit for
+#             3 minutes to validate OOM behavior, graceful degradation,
+#             and automatic recovery of the telemetry data pipeline.
+#
+# Risk Level: HIGH
+# Blast Radius: telemetry-ingest pods (memory resources)
+# Expected Outcome:
+#   - Memory usage on targeted pods reaches ~90% of limit
+#   - Go/Python runtime GC pressure increases (visible in metrics)
+#   - If OOMKilled: pod restarts within 10 seconds (RestartPolicy: Always)
+#   - Telemetry data buffered in Kafka (no data loss even if pod dies)
+#   - Alert fires: "TelemetryIngestMemoryHigh" within 30 seconds
+#   - If NOT OOMKilled: memory reclaimed after stress ends, no restart needed
+#   - Telemetry ingestion rate recovers to baseline within 60 seconds
+#
+# Architecture Context:
+#   telemetry-ingest: High-throughput data ingestion service
+#   - Ingests: Robot joint telemetry, patient vital signs, surgical metrics
+#   - Throughput: ~10,000 events/second per pod
+#   - Memory limit: 1Gi per pod (request: 512Mi)
+#   - Buffering: In-memory ring buffer (128MB) + Kafka producer queue
+#   - At 90% memory (921Mi), the ring buffer should begin evicting old entries
+#   - Kafka ensures at-least-once delivery even if pod is OOMKilled
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - Kafka cluster healthy (telemetry buffer)
+#   - telemetry-ingest pods running with defined memory limits
+#   - Steady-state validation passes
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: neurosphere-memory-stress-telemetry
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: resource-stress
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/blast-radius: service-pods
+    chaos.neurosphere.io/test-target: oom-recovery
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Applies memory pressure to telemetry-ingest pods, filling to 90%
+      of their container memory limit. Tests whether the telemetry pipeline
+      degrades gracefully under memory pressure and recovers after OOMKill
+      without losing patient or surgical telemetry data.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/memory-stress
+    chaos.neurosphere.io/jira: NEURO-CHAOS-005
+    chaos.neurosphere.io/safety-gate: standard
+    chaos.neurosphere.io/expected-alerts: >-
+      TelemetryIngestMemoryHigh, TelemetryIngestOOMKilled,
+      TelemetryIngestionRateDegraded
+    chaos.neurosphere.io/data-safety: >-
+      Kafka provides at-least-once delivery guarantee. Even if telemetry-ingest
+      pods are OOMKilled, in-flight data is preserved in Kafka partitions and
+      reprocessed when pods restart.
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      app: telemetry-ingest
+      project: neurosphere
+  stressors:
+    memory:
+      # Number of memory stress worker threads
+      workers: 1
+      # Size of memory allocation per worker.
+      # telemetry-ingest memory limit = 1Gi (1024Mi)
+      # 90% of 1024Mi ≈ 921Mi
+      # Pod baseline memory usage ≈ 200Mi
+      # So we need to allocate approximately 721Mi to reach 90% total
+      size: '721Mi'
+      # OOMScoreAdj: Keep default. If the stress pushes past the limit,
+      # the kernel OOM killer will terminate the stress worker or the pod.
+      # This is the behavior we want to validate.
+  duration: '3m'
+  # Target only the main container, not sidecars
+  containerNames:
+    - telemetry-ingest
+
+---
+# =============================================================================
+# Recovery Validation: Post-OOM Health Check
+# =============================================================================
+# After the memory stress experiment completes (or OOMKill occurs),
+# validate that telemetry-ingest recovers and resumes data ingestion.
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StatusCheck
+metadata:
+  name: neurosphere-telemetry-recovery-check
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/safety-component: post-validation
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Validates telemetry-ingest recovery after memory stress experiment.
+      Checks health endpoint and confirms ingestion rate has normalized.
+spec:
+  type: HTTP
+  mode: Continuous
+  http:
+    url: http://telemetry-ingest.neurosphere-core.svc:8080/health
+    method: GET
+    criteria:
+      statusCode: "200"
+  intervalSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+  successThreshold: 3
+  recordsHistoryLimit: 30

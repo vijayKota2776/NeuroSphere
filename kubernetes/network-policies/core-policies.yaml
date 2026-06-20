@@ -1,0 +1,143 @@
+# =============================================================================
+# NeuroSphere — Core Namespace Network Policies
+# =============================================================================
+# Defines explicit allow rules for the neurosphere-core namespace, layered
+# on top of the default-deny baseline. Each policy follows the principle of
+# least privilege and is scoped to specific ports and source namespaces.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Policy 1: Allow intra-core pod-to-pod communication
+# Permits all pods within neurosphere-core to communicate with each other.
+# Required for service mesh: robot-command ↔ diagnostic-engine ↔ patient-monitor
+# ↔ telemetry-ingest ↔ gateway.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-core-communication
+  namespace: neurosphere-core
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: allow-intra-namespace
+  annotations:
+    description: "Allow all pods in neurosphere-core to communicate with each other"
+    compliance: "IEC-62443 — intra-zone communication within application boundary"
+spec:
+  podSelector: {}       # Applies to all pods in the namespace
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}   # Any pod in the same namespace (neurosphere-core)
+
+---
+# -----------------------------------------------------------------------------
+# Policy 2: Allow ingress from neurosphere-ingress → neurosphere-core
+# The ingress controller (nginx/envoy) routes external traffic to the gateway
+# and backend services. This policy permits that cross-namespace traffic.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-core
+  namespace: neurosphere-core
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: allow-cross-namespace
+  annotations:
+    description: "Allow ingress controller to route traffic into core services"
+    compliance: "Network perimeter — controlled entry point for external traffic"
+spec:
+  podSelector: {}       # All core pods can receive ingress traffic
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              tier: edge
+              project: neurosphere
+
+---
+# -----------------------------------------------------------------------------
+# Policy 3: Allow neurosphere-core → neurosphere-vault on port 8200
+# Core services retrieve secrets (DB credentials, TLS certs, API keys) from
+# HashiCorp Vault. This is an egress policy from core's perspective but is
+# defined as an ingress policy in the vault namespace (see vault-policies.yaml).
+# Here we define the egress rule for core pods.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-core-to-vault-egress
+  namespace: neurosphere-core
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: allow-cross-namespace
+  annotations:
+    description: "Allow core services to reach Vault on port 8200 for secrets retrieval"
+    compliance: "HIPAA — secure credential management via Vault transit engine"
+spec:
+  podSelector: {}       # All core pods may access Vault
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              tier: security
+              project: neurosphere
+      ports:
+        - protocol: TCP
+          port: 8200
+
+---
+# -----------------------------------------------------------------------------
+# Policy 4: Allow Prometheus (neurosphere-monitor) to scrape core services
+# Prometheus discovers targets via pod annotations (prometheus.io/scrape) and
+# scrapes /metrics endpoints on each service's primary port.
+#
+# Service ports:
+#   robot-command-service    → 5000
+#   diagnostic-engine        → 3000
+#   patient-monitor-service  → 5001
+#   telemetry-ingest-service → 5002
+#   gateway                  → 80
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape-core
+  namespace: neurosphere-core
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: allow-monitoring
+  annotations:
+    description: "Allow Prometheus to scrape /metrics from all core service pods"
+    compliance: "Operational observability — medical device telemetry monitoring"
+spec:
+  podSelector: {}       # All core pods expose /metrics
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              tier: monitoring
+              project: neurosphere
+      ports:
+        - protocol: TCP
+          port: 5000       # robot-command-service
+        - protocol: TCP
+          port: 3000       # diagnostic-engine
+        - protocol: TCP
+          port: 5001       # patient-monitor-service
+        - protocol: TCP
+          port: 5002       # telemetry-ingest-service
+        - protocol: TCP
+          port: 80         # gateway

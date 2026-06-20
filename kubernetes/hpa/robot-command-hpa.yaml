@@ -1,0 +1,56 @@
+# =============================================================================
+# HorizontalPodAutoscaler: robot-command-service
+# =============================================================================
+# Autoscales the robot command service based on CPU and memory utilization.
+# Conservative scaling behavior to ensure stable robotic command dispatch:
+#   - Scale up:  max 2 pods per 60s with 60s stabilization window
+#   - Scale down: max 1 pod per 120s with 300s stabilization window
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: robot-command-hpa
+  namespace: neurosphere-core
+  labels:
+    app: robot-command-service
+    component: autoscaling
+    part-of: neurosphere
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: robot-command-service
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    # CPU utilization — primary scaling signal for command processing load
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Memory utilization — secondary signal for connection/session pressure
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      # 60s stabilization prevents thrashing during transient spikes
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      # 300s stabilization — avoid premature scale-down during surgical procedures
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+      selectPolicy: Min

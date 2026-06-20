@@ -1,0 +1,386 @@
+###############################################################################
+# NeuroSphere Medical Robotics — Cluster Restore Job Template
+#
+# Manually-triggered Kubernetes Job for restoring cluster components from
+# DR backups. This is NOT scheduled — it is applied on-demand by operators.
+#
+# Usage:
+#   1. Edit the restore-params ConfigMap with desired backup date/component
+#   2. Apply: kubectl apply -f restore-job.yaml
+#   3. Monitor: kubectl logs -f job/neurosphere-restore -n neurosphere-backup
+#   4. Cleanup: kubectl delete -f restore-job.yaml
+#
+# HIPAA Compliance:
+#   - Restore actions are fully audit-logged
+#   - PHI data is decrypted only in-memory (emptyDir with Memory medium)
+#   - ServiceAccount has restricted permissions
+#   - Post-restore access controls are validated
+###############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: restore-params
+  namespace: neurosphere-backup
+  labels:
+    app.kubernetes.io/name: restore-agent
+    app.kubernetes.io/part-of: neurosphere
+    app.kubernetes.io/component: disaster-recovery
+data:
+  # ──────────────────────────────────────────────
+  # Restore Parameters — Edit before applying
+  # ──────────────────────────────────────────────
+  BACKUP_DATE: "2026-06-19"             # Date of backup to restore (YYYY-MM-DD)
+  NEUROSPHERE_ENV: "production"          # Target environment
+  RESTORE_COMPONENT: "full"              # Options: full, etcd, vault, database
+  TARGET_DATABASE: "all"                 # For component=database: robot-db, patient-db, telemetry-db, all
+  DRY_RUN: "true"                        # Set to "false" to perform actual restore
+
+  # Cluster connection settings
+  CLUSTER_NAME: "neurosphere-production"
+  VAULT_ADDR: "https://vault.neurosphere.internal:8200"
+  ETCD_ENDPOINTS: "https://etcd.neurosphere.internal:2379"
+
+  # Database hosts
+  ROBOT_DB_HOST: "robot-db.neurosphere.internal"
+  PATIENT_DB_HOST: "patient-db.neurosphere.internal"
+  TELEMETRY_DB_HOST: "telemetry-db.neurosphere.internal"
+  ROBOT_DB_USER: "neurosphere_robot"
+  PATIENT_DB_USER: "neurosphere_patient"
+  TELEMETRY_DB_USER: "neurosphere_telemetry"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neurosphere-restore
+  namespace: neurosphere-backup
+  labels:
+    app.kubernetes.io/name: restore-agent
+    app.kubernetes.io/part-of: neurosphere
+    app.kubernetes.io/component: disaster-recovery
+    app.kubernetes.io/managed-by: manual
+  annotations:
+    description: "Manual cluster restore from DR backup"
+    compliance.neurosphere.io/hipaa: "true"
+    # Prevent accidental re-application
+    kubectl.kubernetes.io/last-applied-configuration: ""
+spec:
+  backoffLimit: 0                        # Do NOT retry restore automatically
+  activeDeadlineSeconds: 14400           # Max 4 hours for full restore
+  ttlSecondsAfterFinished: 172800        # Keep completed job for 48h
+  parallelism: 1
+  completions: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: restore-agent
+        app.kubernetes.io/part-of: neurosphere
+        sidecar.istio.io/inject: "false"
+      annotations:
+        prometheus.io/scrape: "false"
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      serviceAccountName: neurosphere-backup-agent
+      restartPolicy: Never
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # ─────────────────────────────────────────
+      # Init Container: Pre-Restore Validation
+      # ─────────────────────────────────────────
+      initContainers:
+        # 1. Inject secrets from Vault
+        - name: vault-agent-init
+          image: hashicorp/vault:1.15
+          command:
+            - sh
+            - -c
+            - |
+              vault agent -config=/vault/config/agent.hcl -exit-after-auth
+          volumeMounts:
+            - name: vault-agent-config
+              mountPath: /vault/config
+            - name: vault-secrets
+              mountPath: /vault/secrets
+          envFrom:
+            - configMapRef:
+                name: restore-params
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+        # 2. Pre-restore validation
+        - name: pre-restore-validator
+          image: neurosphere/backup-agent:1.0.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              echo "╔════════════════════════════════════════════╗"
+              echo "║  NeuroSphere Pre-Restore Validation       ║"
+              echo "╚════════════════════════════════════════════╝"
+
+              S3_BUCKET="neurosphere-${NEUROSPHERE_ENV}-dr-backups"
+              BACKUP_DATE_COMPACT="${BACKUP_DATE//-/}"
+
+              echo "Backup Date:  ${BACKUP_DATE}"
+              echo "Environment:  ${NEUROSPHERE_ENV}"
+              echo "Component:    ${RESTORE_COMPONENT}"
+              echo "S3 Bucket:    ${S3_BUCKET}"
+              echo "Dry Run:      ${DRY_RUN}"
+              echo ""
+
+              ERRORS=0
+
+              # Check S3 bucket accessibility
+              echo "Checking S3 bucket access..."
+              if ! aws s3api head-bucket --bucket "${S3_BUCKET}" 2>/dev/null; then
+                echo "ERROR: Cannot access S3 bucket: ${S3_BUCKET}"
+                ERRORS=$((ERRORS + 1))
+              else
+                echo "  ✓ S3 bucket accessible"
+              fi
+
+              # Validate etcd backup exists
+              if [[ "${RESTORE_COMPONENT}" == "full" || "${RESTORE_COMPONENT}" == "etcd" ]]; then
+                echo "Checking etcd snapshot..."
+                ETCD_COUNT=$(aws s3 ls "s3://${S3_BUCKET}/etcd-snapshots/" 2>/dev/null \
+                  | grep -c "${BACKUP_DATE_COMPACT}" || true)
+                if [[ ${ETCD_COUNT} -eq 0 ]]; then
+                  echo "  ✗ No etcd snapshot found for ${BACKUP_DATE}"
+                  ERRORS=$((ERRORS + 1))
+                else
+                  echo "  ✓ etcd snapshot found (${ETCD_COUNT} match(es))"
+                fi
+              fi
+
+              # Validate Vault backup exists
+              if [[ "${RESTORE_COMPONENT}" == "full" || "${RESTORE_COMPONENT}" == "vault" ]]; then
+                echo "Checking Vault snapshot..."
+                VAULT_COUNT=$(aws s3 ls "s3://${S3_BUCKET}/vault-snapshots/" 2>/dev/null \
+                  | grep -c "${BACKUP_DATE_COMPACT}" || true)
+                if [[ ${VAULT_COUNT} -eq 0 ]]; then
+                  echo "  ✗ No Vault snapshot found for ${BACKUP_DATE}"
+                  ERRORS=$((ERRORS + 1))
+                else
+                  echo "  ✓ Vault snapshot found (${VAULT_COUNT} match(es))"
+                fi
+              fi
+
+              # Validate database backups exist
+              if [[ "${RESTORE_COMPONENT}" == "full" || "${RESTORE_COMPONENT}" == "database" ]]; then
+                DATABASES="robot-db patient-db telemetry-db"
+                if [[ "${TARGET_DATABASE}" != "all" ]]; then
+                  DATABASES="${TARGET_DATABASE}"
+                fi
+                for DB in ${DATABASES}; do
+                  echo "Checking database backup: ${DB}..."
+                  DB_COUNT=$(aws s3 ls "s3://${S3_BUCKET}/database-backups/${BACKUP_DATE}/" 2>/dev/null \
+                    | grep -c "${DB}" || true)
+                  if [[ ${DB_COUNT} -eq 0 ]]; then
+                    echo "  ✗ No backup found for ${DB}"
+                    ERRORS=$((ERRORS + 1))
+                  else
+                    echo "  ✓ ${DB} backup found"
+                  fi
+                done
+              fi
+
+              echo ""
+              if [[ ${ERRORS} -gt 0 ]]; then
+                echo "╔════════════════════════════════════════════╗"
+                echo "║  ✗ VALIDATION FAILED (${ERRORS} error(s))          ║"
+                echo "║  Restore will NOT proceed.                ║"
+                echo "╚════════════════════════════════════════════╝"
+                exit 1
+              fi
+
+              echo "╔════════════════════════════════════════════╗"
+              echo "║  ✓ ALL VALIDATIONS PASSED                 ║"
+              echo "║  Restore may proceed.                     ║"
+              echo "╚════════════════════════════════════════════╝"
+
+          envFrom:
+            - configMapRef:
+                name: restore-params
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+      # ─────────────────────────────────────────
+      # Main Container: Restore Agent
+      # ─────────────────────────────────────────
+      containers:
+        - name: restore-agent
+          image: neurosphere/backup-agent:1.0.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+
+              echo "╔════════════════════════════════════════════╗"
+              echo "║  NeuroSphere Cluster Restore              ║"
+              echo "╚════════════════════════════════════════════╝"
+
+              # Source Vault-injected credentials
+              if [[ -f /vault/secrets/db-credentials.env ]]; then
+                source /vault/secrets/db-credentials.env
+              fi
+
+              # Build restore command
+              RESTORE_CMD="/scripts/restore-cluster.sh \
+                --backup-date ${BACKUP_DATE} \
+                --environment ${NEUROSPHERE_ENV} \
+                --component ${RESTORE_COMPONENT}"
+
+              if [[ "${RESTORE_COMPONENT}" == "database" ]]; then
+                RESTORE_CMD="${RESTORE_CMD} --database ${TARGET_DATABASE}"
+              fi
+
+              if [[ "${DRY_RUN}" == "true" ]]; then
+                RESTORE_CMD="${RESTORE_CMD} --dry-run"
+              fi
+
+              echo "Executing: ${RESTORE_CMD}"
+              echo ""
+
+              eval ${RESTORE_CMD}
+              EXIT_CODE=$?
+
+              # Copy restore report to shared volume for retrieval
+              if ls /var/log/neurosphere/restore-report-*.json 1>/dev/null 2>&1; then
+                echo ""
+                echo "=== Restore Report ==="
+                cat /var/log/neurosphere/restore-report-*.json | python3 -m json.tool
+              fi
+
+              exit ${EXIT_CODE}
+
+          envFrom:
+            - configMapRef:
+                name: restore-params
+          env:
+            - name: GPG_HOMEDIR
+              value: "/gpg"
+            - name: OPERATOR
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KMS_KEY_ID
+              value: "alias/neurosphere-production-dr"
+
+          volumeMounts:
+            - name: restore-scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: vault-secrets
+              mountPath: /vault/secrets
+              readOnly: true
+            - name: gpg-keyring
+              mountPath: /gpg
+              readOnly: true
+            - name: etcd-certs
+              mountPath: /etc/kubernetes/pki/etcd
+              readOnly: true
+            - name: temp-storage
+              mountPath: /tmp
+            - name: log-storage
+              mountPath: /var/log/neurosphere
+            - name: restore-output
+              mountPath: /restore-output
+
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 10Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+              ephemeral-storage: 50Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+
+      volumes:
+        - name: restore-scripts
+          configMap:
+            name: backup-scripts
+            defaultMode: 0755
+        - name: vault-agent-config
+          configMap:
+            name: vault-agent-config
+        - name: vault-secrets
+          emptyDir:
+            medium: Memory         # PHI credentials in-memory only
+            sizeLimit: 16Mi
+        - name: gpg-keyring
+          secret:
+            secretName: neurosphere-gpg-keyring
+            defaultMode: 0600
+        - name: etcd-certs
+          secret:
+            secretName: etcd-client-certs
+            defaultMode: 0600
+        - name: temp-storage
+          emptyDir:
+            sizeLimit: 40Gi
+        - name: log-storage
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: restore-output
+          emptyDir:
+            sizeLimit: 1Gi
+
+      # Run on high-memory nodes for large database restores
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values:
+                      - m5.xlarge
+                      - m5.2xlarge
+                      - m5.4xlarge
+                      - r5.xlarge
+                      - r5.2xlarge
+
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "backup"
+          effect: "NoSchedule"
+
+      # Give restore job high priority
+      priorityClassName: system-cluster-critical

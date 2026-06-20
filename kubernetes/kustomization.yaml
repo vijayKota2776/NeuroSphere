@@ -1,0 +1,53 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Root Kustomization
+# =============================================================================
+# Aggregates all Kubernetes resources for the NeuroSphere platform.
+# Use this as the base configuration; apply environment-specific overlays
+# (dev, staging, prod) for targeted deployments.
+#
+# Usage:
+#   kubectl apply -k kubernetes/                        # Apply base
+#   kubectl apply -k kubernetes/overlays/dev/           # Apply dev overlay
+#   kubectl apply -k kubernetes/overlays/prod/          # Apply prod overlay
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: neurosphere-platform
+
+# ---------------------------------------------------------------------------
+# Common labels applied to all resources
+# ---------------------------------------------------------------------------
+commonLabels:
+  platform: neurosphere
+  managed-by: kustomize
+
+# ---------------------------------------------------------------------------
+# Resources — ordered by dependency (namespaces first, then core, then policies)
+# ---------------------------------------------------------------------------
+resources:
+  # --- Namespaces ---
+  - namespaces/
+
+  # --- Core Services (Deployments, Services, ConfigMaps) ---
+  - core/
+
+  # --- Network Policies ---
+  - network-policies/
+
+  # --- Horizontal Pod Autoscalers ---
+  - hpa/robot-command-hpa.yaml
+  - hpa/diagnostic-engine-hpa.yaml
+  - hpa/patient-monitor-hpa.yaml
+  - hpa/telemetry-ingest-hpa.yaml
+
+  # --- Pod Disruption Budgets ---
+  - pdb/robot-command-pdb.yaml
+  - pdb/diagnostic-engine-pdb.yaml
+  - pdb/patient-monitor-pdb.yaml
+  - pdb/telemetry-ingest-pdb.yaml
+  - pdb/gateway-pdb.yaml
+
+  # --- Ingress ---
+  - ingress/ingress.yaml

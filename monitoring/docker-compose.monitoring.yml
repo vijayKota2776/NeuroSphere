@@ -1,0 +1,434 @@
+# ============================================================================
+# NeuroSphere — Monitoring & Observability Stack
+# Docker Compose for Prometheus + Grafana + Alertmanager + ELK
+#
+# Provides full-stack observability for the medical robotics platform:
+#   Metrics:  Prometheus → Grafana (dashboards + alerts)
+#   Logs:     Filebeat → Logstash → Elasticsearch → Kibana
+#   Alerts:   Alertmanager (PagerDuty / Slack / Email routing)
+#
+# Usage:
+#   docker compose -f docker-compose.monitoring.yml up -d
+#   docker compose -f docker-compose.monitoring.yml down -v   # Remove volumes
+#   docker compose -f docker-compose.monitoring.yml logs -f   # Follow logs
+#
+# Prerequisites:
+#   The main neurosphere-network must exist (created by main docker-compose.yml)
+#   Run: docker network create neurosphere-network (if not already created)
+#
+# Healthcare Compliance:
+#   - HIPAA: Audit logging enabled, PHI access controls recommended
+#   - IEC 62443: Medical device telemetry secured in transit
+#   - FDA SaMD: Diagnostic pipeline audit trails preserved
+# ============================================================================
+
+
+services:
+
+  # ==========================================================================
+  # METRICS LAYER — Prometheus + Grafana + Alertmanager + Node Exporter
+  # ==========================================================================
+
+  # --------------------------------------------------------------------------
+  # Prometheus — Time-series metrics collection and alerting engine
+  # Scrapes /metrics from all NeuroSphere services
+  # --------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: neurosphere-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=10GB"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+      - "--log.level=info"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    labels:
+      - "com.neurosphere.service=prometheus"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=observability"
+
+  # --------------------------------------------------------------------------
+  # Grafana — Visualization dashboards for metrics and logs
+  # Access: http://localhost:3001 (admin / neurosphere)
+  # Port 3001 to avoid conflict with diagnostic-engine on 3000
+  # --------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: neurosphere-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-neurosphere}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
+      - GF_LOG_LEVEL=info
+      - GF_LOG_MODE=console
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/neurosphere-overview.json
+      # Healthcare branding
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          cpus: "0.10"
+          memory: 128M
+    labels:
+      - "com.neurosphere.service=grafana"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=observability"
+
+  # --------------------------------------------------------------------------
+  # Alertmanager — Alert routing, grouping, silencing, and notification
+  # Routes critical alerts to PagerDuty, Slack, and email
+  # --------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: neurosphere-alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--web.listen-address=:9093"
+      - "--cluster.listen-address="
+      - "--log.level=info"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+    labels:
+      - "com.neurosphere.service=alertmanager"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=alerting"
+
+  # --------------------------------------------------------------------------
+  # Node Exporter — Host-level system metrics (CPU, memory, disk, network)
+  # --------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: neurosphere-node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.rootfs=/rootfs"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+      - "--collector.netclass.ignored-devices=^(veth.*|br.*|docker.*|lo)$$"
+      - "--no-collector.ipvs"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - neurosphere-network
+    pid: host
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+    labels:
+      - "com.neurosphere.service=node-exporter"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=infrastructure"
+
+  # ==========================================================================
+  # LOGGING LAYER — Elasticsearch + Logstash + Kibana + Filebeat (ELK)
+  # ==========================================================================
+
+  # --------------------------------------------------------------------------
+  # Elasticsearch — Distributed search and log storage engine
+  # Stores all NeuroSphere service logs with per-service index patterns
+  # --------------------------------------------------------------------------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.1
+    container_name: neurosphere-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - node.name=neurosphere-es-node-1
+      - cluster.name=neurosphere-logging
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.monitoring.collection.enabled=true
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      # HIPAA: Enable audit logging in production
+      # - xpack.security.audit.enabled=true
+    volumes:
+      - ./elk/elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+        reservations:
+          cpus: "0.50"
+          memory: 1G
+    labels:
+      - "com.neurosphere.service=elasticsearch"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=logging"
+      - "com.neurosphere.compliance=HIPAA-log-storage"
+
+  # --------------------------------------------------------------------------
+  # Logstash — Log processing and transformation pipeline
+  # Parses, enriches, and routes logs from all NeuroSphere services
+  # --------------------------------------------------------------------------
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.1
+    container_name: neurosphere-logstash
+    restart: unless-stopped
+    ports:
+      - "5044:5044"       # Beats input (Filebeat)
+      - "5000:5000/tcp"   # TCP JSON input (direct log shipping)
+      - "9600:9600"       # Logstash monitoring API
+    environment:
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - NEUROSPHERE_ENV=${NEUROSPHERE_ENV:-development}
+      - NEUROSPHERE_CLUSTER=${NEUROSPHERE_CLUSTER:-neurosphere-dev-01}
+    volumes:
+      - ./elk/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./elk/logstash/pipeline/:/usr/share/logstash/pipeline/:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600/_node/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 384M
+    labels:
+      - "com.neurosphere.service=logstash"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=logging"
+
+  # --------------------------------------------------------------------------
+  # Kibana — Log exploration and visualization dashboard
+  # Access: http://localhost:5601
+  # --------------------------------------------------------------------------
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.1
+    container_name: neurosphere-kibana
+    restart: unless-stopped
+    ports:
+      - "5601:5601"
+    volumes:
+      - ./elk/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_NAME=neurosphere-kibana
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+    labels:
+      - "com.neurosphere.service=kibana"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=logging"
+
+  # --------------------------------------------------------------------------
+  # Filebeat — Lightweight log shipper for Docker container logs
+  # Auto-discovers NeuroSphere containers and ships logs to Logstash
+  # --------------------------------------------------------------------------
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.12.1
+    container_name: neurosphere-filebeat
+    restart: unless-stopped
+    user: root  # Required for Docker socket and container log access
+    volumes:
+      - ./elk/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - filebeat-data:/usr/share/filebeat/data
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - LOGSTASH_HOSTS=logstash:5044
+    command: ["--strict.perms=false"]
+    healthcheck:
+      test: ["CMD-SHELL", "filebeat test config -e || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      logstash:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - neurosphere-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+    labels:
+      - "com.neurosphere.service=filebeat"
+      - "com.neurosphere.tier=monitoring"
+      - "com.neurosphere.domain=logging"
+
+
+# ============================================================================
+# Volumes — Persistent data stores
+# ============================================================================
+volumes:
+  # Metrics
+  prometheus-data:
+    driver: local
+    labels:
+      - "com.neurosphere.volume=prometheus-tsdb"
+  grafana-data:
+    driver: local
+    labels:
+      - "com.neurosphere.volume=grafana-db"
+  alertmanager-data:
+    driver: local
+    labels:
+      - "com.neurosphere.volume=alertmanager-state"
+
+  # Logging
+  elasticsearch-data:
+    driver: local
+    labels:
+      - "com.neurosphere.volume=elasticsearch-indices"
+      - "com.neurosphere.compliance=HIPAA-log-retention"
+  filebeat-data:
+    driver: local
+    labels:
+      - "com.neurosphere.volume=filebeat-registry"
+
+
+# ============================================================================
+# Networks — Connect to the main NeuroSphere network
+# ============================================================================
+networks:
+  neurosphere-network:
+    external: true
+    name: neurosphere-network

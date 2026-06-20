@@ -1,0 +1,58 @@
+# =============================================================================
+# Nginx Ingress Controller — Installation Notes
+# =============================================================================
+# The Nginx Ingress Controller is deployed via Helm chart, not as a raw
+# manifest. This file documents the recommended installation procedure.
+#
+# Prerequisites:
+#   - Helm 3.x installed
+#   - kubectl configured for the target cluster
+#   - neurosphere-ingress namespace created
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Step 1: Add the official ingress-nginx Helm repository
+# -----------------------------------------------------------------------------
+# helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+# helm repo update
+
+# -----------------------------------------------------------------------------
+# Step 2: Install the Nginx Ingress Controller
+# -----------------------------------------------------------------------------
+# helm install ingress-nginx ingress-nginx/ingress-nginx \
+#   --namespace neurosphere-ingress \
+#   --create-namespace \
+#   --set controller.replicaCount=2 \
+#   --set controller.resources.requests.cpu=100m \
+#   --set controller.resources.requests.memory=128Mi \
+#   --set controller.resources.limits.cpu=500m \
+#   --set controller.resources.limits.memory=256Mi \
+#   --set controller.metrics.enabled=true \
+#   --set controller.metrics.serviceMonitor.enabled=true \
+#   --set controller.admissionWebhooks.enabled=true
+
+# -----------------------------------------------------------------------------
+# Step 3: Verify installation
+# -----------------------------------------------------------------------------
+# kubectl get pods -n neurosphere-ingress
+# kubectl get svc  -n neurosphere-ingress
+
+# -----------------------------------------------------------------------------
+# Step 4: (Optional) Install cert-manager for automatic TLS certificates
+# -----------------------------------------------------------------------------
+# helm repo add jetstack https://charts.jetstack.io
+# helm install cert-manager jetstack/cert-manager \
+#   --namespace cert-manager \
+#   --create-namespace \
+#   --set installCRDs=true
+
+# -----------------------------------------------------------------------------
+# Production Considerations:
+# -----------------------------------------------------------------------------
+# - Use controller.replicaCount >= 2 for high availability
+# - Enable metrics + ServiceMonitor for Prometheus integration
+# - Configure controller.config.proxy-buffer-size for large headers
+# - Set controller.config.use-forwarded-headers: "true" behind cloud LBs
+# - Consider controller.autoscaling.enabled for dynamic scaling
+# =============================================================================

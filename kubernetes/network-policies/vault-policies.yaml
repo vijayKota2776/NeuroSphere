@@ -1,0 +1,87 @@
+# =============================================================================
+# NeuroSphere — Vault Namespace Network Policies
+# =============================================================================
+# Defines strict ingress controls for the neurosphere-vault namespace.
+# Only neurosphere-core pods may access Vault, and only on port 8200.
+# Vault HA peers must communicate with each other for Raft consensus.
+# All other ingress is denied by the default-deny policy.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Policy 1: Allow neurosphere-core pods to access Vault on port 8200
+# Core microservices use the Vault HTTP API (port 8200) to:
+#   - Retrieve database credentials (dynamic secrets)
+#   - Fetch TLS certificates from Vault PKI engine
+#   - Encrypt/decrypt PHI via Vault Transit engine
+#   - Read configuration secrets for service initialization
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-core-to-vault
+  namespace: neurosphere-vault
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: allow-cross-namespace
+  annotations:
+    description: "Allow only neurosphere-core pods to access Vault API on port 8200"
+    compliance: "HIPAA — least-privilege access to encryption key management"
+spec:
+  podSelector:
+    matchLabels:
+      app: vault            # Targets Vault server pods only
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              tier: application
+              project: neurosphere
+      ports:
+        - protocol: TCP
+          port: 8200         # Vault HTTP API port
+
+---
+# -----------------------------------------------------------------------------
+# Policy 2: Allow Vault pods to communicate with each other (HA / Raft)
+# In a highly-available Vault deployment, Vault nodes use Raft consensus
+# protocol for leader election and log replication. This requires:
+#   - Port 8200: API forwarding (standby → active leader)
+#   - Port 8201: Cluster/replication traffic (Raft consensus)
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-vault-ha-replication
+  namespace: neurosphere-vault
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: allow-intra-namespace
+  annotations:
+    description: "Allow Vault pods to communicate for HA Raft consensus and replication"
+    compliance: "High availability — ensures secrets engine resilience"
+spec:
+  podSelector:
+    matchLabels:
+      app: vault
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: vault     # Only other Vault pods
+      ports:
+        - protocol: TCP
+          port: 8200         # API forwarding (standby → leader)
+        - protocol: TCP
+          port: 8201         # Raft cluster replication port
+
+# -----------------------------------------------------------------------------
+# NOTE: All other ingress to neurosphere-vault is denied by the
+# default-deny-ingress-vault policy in default-deny.yaml.
+# No additional deny rules are required here.
+# -----------------------------------------------------------------------------

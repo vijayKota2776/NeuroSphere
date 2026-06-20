@@ -1,0 +1,131 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Bandit SAST Configuration
+# =============================================================================
+# Purpose:  Static analysis security testing for all Python microservices
+# Scope:    All Python source under services/, infrastructure/, tools/
+# Standard: Aligned with IEC 62443-4-1 (Secure Development Lifecycle)
+#           and FDA Guidance on Cybersecurity in Medical Devices
+# Usage:    bandit -c security/scanning/.bandit.yml -r services/
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Skipped Tests
+# ---------------------------------------------------------------------------
+# Each skip MUST be justified. Unjustified skips will be flagged in audit.
+skips:
+  # B101 — Use of assert
+  # Rationale: assert statements are used extensively in unit and integration
+  # tests. Production code is validated separately via code review checklist
+  # item SEC-PY-003 which prohibits assert for input validation.
+  - B101
+
+  # B601 — Paramiko call with policy argument
+  # Rationale: NeuroSphere does not use Paramiko for SSH. All remote
+  # operations use Kubernetes exec API or Vault SSH certificate signing.
+  # This check produces noise on unrelated subprocess calls.
+  - B601
+
+  # B104 — Binding to all interfaces (0.0.0.0)
+  # Rationale: Container services intentionally bind to 0.0.0.0 inside the
+  # pod network. Network isolation is enforced by Kubernetes NetworkPolicy
+  # and Istio authorization policies, not at the application bind level.
+  # Suppressed here; verified by infrastructure security scan instead.
+  - B104
+
+# ---------------------------------------------------------------------------
+# Excluded Directories
+# ---------------------------------------------------------------------------
+# These directories are excluded from scanning to reduce noise and runtime.
+exclude_dirs:
+  - tests              # Test code — assertions and mocks are expected
+  - .venv              # Virtual environment — third-party code
+  - node_modules       # Node.js dependencies — not Python
+  - __pycache__        # Compiled bytecode
+  - .git               # Version control
+  - migrations         # Database migrations — auto-generated
+  - docs               # Documentation
+  - .mypy_cache        # Type checker cache
+  - .pytest_cache      # Test runner cache
+
+# ---------------------------------------------------------------------------
+# Output Configuration
+# ---------------------------------------------------------------------------
+# Aggregate results per file for cleaner CI output
+aggregate: file
+
+# Show top N issues per file (0 = unlimited)
+number: 3
+
+# ---------------------------------------------------------------------------
+# Severity & Confidence Thresholds
+# ---------------------------------------------------------------------------
+# Findings below these thresholds are suppressed from output.
+# Scale: 1 = LOW, 2 = MEDIUM, 3 = HIGH
+#
+# For medical device software (IEC 62443-4-1 SL 2), we require at minimum
+# MEDIUM severity AND MEDIUM confidence to flag.
+confidence: 2   # MEDIUM — suppress LOW confidence findings (likely false positives)
+severity: 2     # MEDIUM — suppress LOW severity findings (informational)
+
+# ---------------------------------------------------------------------------
+# Profile (optional — uncomment to use a predefined Bandit profile)
+# ---------------------------------------------------------------------------
+# profile:
+#   include:
+#     - any_other_function_with_shell_equals_true
+#     - assert_used
+#     - exec_used
+#     - hardcoded_bind_all_interfaces
+#     - hardcoded_password_string
+#     - hardcoded_tmp_directory
+#     - request_without_timeout
+#     - snmp_insecure_version
+#     - ssl_with_bad_version
+#     - try_except_pass
+
+# ---------------------------------------------------------------------------
+# Additional Checks (explicit includes beyond defaults)
+# ---------------------------------------------------------------------------
+# tests:
+#   - B105  # Hardcoded password strings
+#   - B106  # Hardcoded password function args
+#   - B107  # Hardcoded password defaults
+#   - B108  # Hardcoded /tmp paths
+#   - B110  # try-except-pass
+#   - B112  # try-except-continue
+#   - B301  # Pickle usage (critical for medical data integrity)
+#   - B302  # marshal usage
+#   - B303  # Insecure hash (MD5/SHA1 for security purposes)
+#   - B304  # Insecure cipher
+#   - B305  # Insecure cipher mode
+#   - B306  # mktemp (race condition)
+#   - B307  # eval usage
+#   - B308  # mark_safe (XSS)
+#   - B310  # urllib_urlopen
+#   - B311  # random (not cryptographic)
+#   - B312  # telnetlib
+#   - B313  # xml.etree (XXE)
+#   - B320  # xml.sax (XXE)
+#   - B323  # unverified SSL context
+#   - B324  # Insecure hash for non-security purposes
+#   - B501  # request with verify=False
+#   - B502  # SSL with bad version
+#   - B503  # SSL with bad defaults
+#   - B504  # SSL with no version
+#   - B505  # Weak cryptographic key
+#   - B506  # Unsafe YAML load
+#   - B507  # SSH no host key verification
+#   - B508  # Snort rule with pcre
+#   - B509  # Snort rule without content
+#   - B602  # subprocess with shell=True
+#   - B603  # subprocess without shell=True
+#   - B604  # Function call with shell=True
+#   - B605  # Start process with a shell
+#   - B606  # Start process with no shell
+#   - B607  # Start process with partial path
+#   - B608  # SQL injection via string formatting
+#   - B609  # Wildcard injection
+#   - B610  # Django extra
+#   - B611  # Django raw SQL
+#   - B701  # Jinja2 autoescape false
+#   - B702  # Mako templates

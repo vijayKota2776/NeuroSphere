@@ -1,0 +1,220 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Alertmanager Configuration
+# =============================================================================
+# Alert routing hierarchy (highest → lowest priority):
+#   1. patient_safety   → PagerDuty (highest urgency, 2 min repeat)
+#   2. surgical_robotics → PagerDuty (high urgency, 3 min repeat)
+#   3. severity=critical → PagerDuty (critical, 5 min repeat)
+#   4. severity=warning  → Slack (warnings channel, 30 min repeat)
+#   5. default           → Slack (notifications channel)
+# =============================================================================
+
+global:
+  resolve_timeout: 5m
+  smtp_from: "alerts@neurosphere.io"
+  smtp_smarthost: "smtp.neurosphere.io:587"
+  smtp_auth_username: "alerts@neurosphere.io"
+  smtp_auth_password: "${SMTP_PASSWORD}"
+  smtp_require_tls: true
+
+  slack_api_url: "${SLACK_WEBHOOK_URL}"
+  pagerduty_url: "https://events.pagerduty.com/v2/enqueue"
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+# ---------------------------------------------------------------------------
+# Routing tree
+# ---------------------------------------------------------------------------
+route:
+  receiver: slack-notifications
+  group_by: ["alertname", "service", "domain"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # ---- HIGHEST PRIORITY: Patient Safety ----
+    - match:
+        domain: patient-monitoring
+      receiver: pagerduty-patient-safety
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 2m
+      continue: true       # also send to compliance
+
+    # ---- Patient safety → compliance email ----
+    - match:
+        domain: patient-monitoring
+        compliance: hipaa
+      receiver: email-compliance
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 1h
+
+    # ---- Surgical robotics alerts ----
+    - match:
+        domain: surgical-robotics
+      receiver: pagerduty-surgical
+      group_wait: 15s
+      group_interval: 2m
+      repeat_interval: 3m
+
+    # ---- All other critical alerts ----
+    - match:
+        severity: critical
+      receiver: pagerduty-critical
+      group_wait: 15s
+      group_interval: 3m
+      repeat_interval: 5m
+
+    # ---- High severity (non-critical but urgent) ----
+    - match:
+        severity: high
+      receiver: pagerduty-critical
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 10m
+
+    # ---- Warning-level alerts → Slack ----
+    - match:
+        severity: warning
+      receiver: slack-warnings
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 30m
+
+# ---------------------------------------------------------------------------
+# Inhibition rules
+# ---------------------------------------------------------------------------
+inhibit_rules:
+  # Critical alerts suppress warnings for the same alert
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["alertname", "service"]
+
+  # Critical alerts suppress high-severity for the same alert
+  - source_match:
+      severity: critical
+    target_match:
+      severity: high
+    equal: ["alertname", "service"]
+
+  # If the entire service is down, suppress latency/error alerts for it
+  - source_match:
+      alertname: "RobotCommandServiceDown"
+    target_match_re:
+      alertname: "RobotCommandLatencyHigh|ActiveProceduresWithHighLatency"
+    equal: ["service"]
+
+  - source_match:
+      alertname: "PatientMonitorDown"
+    target_match_re:
+      alertname: "PatientVitalsAnomalyHigh|HighPatientAlertRate"
+    equal: ["service"]
+
+  - source_match:
+      alertname: "DiagnosticEngineDown"
+    target_match_re:
+      alertname: "DiagnosticQueueBacklog|DiagnosticAccuracyLow"
+    equal: ["service"]
+
+# ---------------------------------------------------------------------------
+# Receivers
+# ---------------------------------------------------------------------------
+receivers:
+  # ---- Default Slack notifications ----
+  - name: slack-notifications
+    slack_configs:
+      - channel: "#neurosphere-alerts"
+        send_resolved: true
+        api_url: "${SLACK_WEBHOOK_URL}"
+        title: '{{ template "slack.neurosphere.title" . }}'
+        text: >-
+          *Alert:* {{ .CommonAnnotations.summary }}
+          *Severity:* {{ .CommonLabels.severity }}
+          *Service:* {{ .CommonLabels.service }}
+          *Description:* {{ .CommonAnnotations.description }}
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+
+  # ---- Slack warnings (lower-priority channel) ----
+  - name: slack-warnings
+    slack_configs:
+      - channel: "#neurosphere-warnings"
+        send_resolved: true
+        api_url: "${SLACK_WARNINGS_WEBHOOK_URL}"
+        title: '⚠️ [{{ .CommonLabels.severity | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: >-
+          *Service:* {{ .CommonLabels.service }}
+          *Description:* {{ .CommonAnnotations.description }}
+          *Runbook:* {{ .CommonAnnotations.runbook_url }}
+        color: "warning"
+
+  # ---- PagerDuty: critical (general) ----
+  - name: pagerduty-critical
+    pagerduty_configs:
+      - service_key: "${PAGERDUTY_CRITICAL_SERVICE_KEY}"
+        severity: critical
+        description: >-
+          [NeuroSphere CRITICAL] {{ .CommonAnnotations.summary }}
+        details:
+          service: "{{ .CommonLabels.service }}"
+          domain: "{{ .CommonLabels.domain }}"
+          description: "{{ .CommonAnnotations.description }}"
+          runbook_url: "{{ .CommonAnnotations.runbook_url }}"
+
+  # ---- PagerDuty: patient safety (HIGHEST urgency) ----
+  - name: pagerduty-patient-safety
+    pagerduty_configs:
+      - service_key: "${PAGERDUTY_PATIENT_SAFETY_SERVICE_KEY}"
+        severity: critical
+        description: >-
+          🚨 [PATIENT SAFETY] {{ .CommonAnnotations.summary }}
+        client: "NeuroSphere Patient Safety Monitor"
+        client_url: "https://grafana.neurosphere.io/d/patient-monitoring"
+        details:
+          service: "{{ .CommonLabels.service }}"
+          clinical_impact: "{{ .CommonAnnotations.clinical_impact }}"
+          description: "{{ .CommonAnnotations.description }}"
+          runbook_url: "{{ .CommonAnnotations.runbook_url }}"
+          compliance: "{{ .CommonLabels.compliance }}"
+
+  # ---- PagerDuty: surgical robotics ----
+  - name: pagerduty-surgical
+    pagerduty_configs:
+      - service_key: "${PAGERDUTY_SURGICAL_SERVICE_KEY}"
+        severity: critical
+        description: >-
+          🤖 [SURGICAL ROBOTICS] {{ .CommonAnnotations.summary }}
+        client: "NeuroSphere Surgical Robotics Monitor"
+        client_url: "https://grafana.neurosphere.io/d/robot-fleet"
+        details:
+          service: "{{ .CommonLabels.service }}"
+          clinical_impact: "{{ .CommonAnnotations.clinical_impact }}"
+          description: "{{ .CommonAnnotations.description }}"
+          runbook_url: "{{ .CommonAnnotations.runbook_url }}"
+
+  # ---- Email: compliance / audit trail ----
+  - name: email-compliance
+    email_configs:
+      - to: "compliance@neurosphere.io"
+        send_resolved: true
+        headers:
+          Subject: >-
+            [NeuroSphere Compliance] {{ .CommonAnnotations.summary }}
+        html: >-
+          <h2>NeuroSphere Compliance Alert</h2>
+          <p><strong>Alert:</strong> {{ .CommonAnnotations.summary }}</p>
+          <p><strong>Severity:</strong> {{ .CommonLabels.severity }}</p>
+          <p><strong>Service:</strong> {{ .CommonLabels.service }}</p>
+          <p><strong>Clinical Impact:</strong> {{ .CommonAnnotations.clinical_impact }}</p>
+          <p><strong>Description:</strong> {{ .CommonAnnotations.description }}</p>
+          <p><strong>Compliance Tag:</strong> {{ .CommonLabels.compliance }}</p>
+          <hr>
+          <p><em>This is an automated alert from the NeuroSphere monitoring system.
+          Retain this email for HIPAA audit trail purposes.</em></p>

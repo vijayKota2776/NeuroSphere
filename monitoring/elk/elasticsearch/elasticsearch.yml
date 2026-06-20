@@ -1,0 +1,58 @@
+# ============================================================================
+# NeuroSphere — Elasticsearch Configuration
+# Healthcare Log Storage and Search Engine
+#
+# Cluster: neurosphere-logging
+# Compliance: HIPAA-ready audit logging (enable xpack.security in production)
+# ============================================================================
+
+cluster.name: neurosphere-logging
+node.name: neurosphere-es-node-1
+network.host: 0.0.0.0
+http.port: 9200
+
+# ---------------------------------------------------------------------------
+# Discovery — Single-node mode for development/staging
+# In production, configure multi-node with dedicated master, data, ingest nodes
+# ---------------------------------------------------------------------------
+discovery.type: single-node
+
+# ---------------------------------------------------------------------------
+# Security — Disabled for local dev; MUST enable in production with TLS
+# Production checklist:
+#   1. Enable xpack.security
+#   2. Configure TLS for transport and HTTP layers
+#   3. Set up role-based access control (RBAC)
+#   4. Enable audit logging for HIPAA compliance
+# ---------------------------------------------------------------------------
+xpack.security.enabled: false
+xpack.monitoring.collection.enabled: true
+
+# ---------------------------------------------------------------------------
+# Index Management
+# Auto-create allows Logstash to create time-based indices dynamically
+# Pattern: neurosphere-{service_name}-YYYY.MM.dd
+# ---------------------------------------------------------------------------
+action.auto_create_index: true
+
+# ---------------------------------------------------------------------------
+# Memory — Lock JVM heap to prevent swapping (critical for performance)
+# Requires Docker memlock ulimit to be set to unlimited
+# ---------------------------------------------------------------------------
+bootstrap.memory_lock: true
+
+# ---------------------------------------------------------------------------
+# HIPAA Compliance (Production)
+# Uncomment the following for healthcare-grade audit trails:
+# ---------------------------------------------------------------------------
+# xpack.security.audit.enabled: true
+# xpack.security.audit.logfile.events.include:
+#   - access_denied
+#   - access_granted
+#   - anonymous_access_denied
+#   - authentication_failed
+#   - connection_denied
+#   - tampered_request
+#   - run_as_denied
+#   - run_as_granted
+# xpack.security.audit.logfile.events.emit_request_body: true

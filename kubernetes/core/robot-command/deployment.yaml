@@ -1,0 +1,118 @@
+# =============================================================================
+# NeuroSphere — Robot Command Service Deployment
+# =============================================================================
+# The Robot Command Service is the primary control plane for surgical robotic
+# arms. It translates high-level surgical procedure commands into low-level
+# motor control instructions, enforces safety interlocks, and maintains
+# real-time telemetry of robot joint positions and force-torque sensors.
+#
+# Compliance: IEC-62443 (Industrial Cybersecurity for Medical Devices)
+# Criticality: HIGH — direct control of surgical instruments
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: robot-command-service
+  namespace: neurosphere-core
+  labels:
+    app: robot-command-service
+    tier: backend
+    domain: surgical-robotics
+    compliance: iec-62443
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "Surgical robot command and control service"
+    compliance-standard: "IEC-62443 — Industrial Automation and Control Systems Security"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: robot-command-service
+  template:
+    metadata:
+      labels:
+        app: robot-command-service
+        tier: backend
+        domain: surgical-robotics
+        compliance: iec-62443
+        project: neurosphere
+      annotations:
+        # -- Prometheus scraping configuration --
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5000"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      # -- Security context: non-root, read-only filesystem, no escalation --
+      securityContext:
+        runAsNonRoot: true
+
+      containers:
+        - name: robot-command-service
+          image: neurosphere/robot-command-service:latest
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+
+          # -- Resource requests and limits --
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+          # -- Liveness probe: is the process alive? --
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Readiness probe: is the service ready to accept traffic? --
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Environment variables from ConfigMap --
+          env:
+            - name: SERVICE_NAME
+              value: "robot-command-service"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: LOG_LEVEL
+            - name: FLASK_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: FLASK_ENV
+            - name: METRICS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: METRICS_ENABLED
+            - name: SERVICE_DISCOVERY_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: SERVICE_DISCOVERY_ENABLED
+
+          # -- Container security context --
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false

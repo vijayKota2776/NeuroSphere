@@ -1,0 +1,105 @@
+# =============================================================================
+# NeuroSphere — API Gateway Deployment
+# =============================================================================
+# The API Gateway is the single entry point for all external traffic into
+# the NeuroSphere platform. Built on Nginx, it provides:
+#   - Request routing to backend microservices
+#   - TLS termination (when configured with cert-manager)
+#   - Rate limiting and request throttling
+#   - CORS header injection
+#   - Request/response logging for audit compliance
+#
+# The gateway proxies to:
+#   /api/robots/*     → robot-command-service:5000
+#   /api/diagnostics/* → diagnostic-engine-service:3000
+#   /api/patients/*   → patient-monitor-service:5001
+#   /api/telemetry/*  → telemetry-ingest-service:5002
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neurosphere-gateway
+  namespace: neurosphere-core
+  labels:
+    app: neurosphere-gateway
+    tier: frontend
+    domain: api-gateway
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "Nginx API gateway — single entry point for NeuroSphere platform"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: neurosphere-gateway
+  template:
+    metadata:
+      labels:
+        app: neurosphere-gateway
+        tier: frontend
+        domain: api-gateway
+        project: neurosphere
+      annotations:
+        # -- Prometheus scraping configuration --
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "80"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        runAsNonRoot: true
+
+      containers:
+        - name: neurosphere-gateway
+          image: neurosphere/neurosphere-gateway:latest
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+
+          # -- Lightweight resource profile for reverse proxy --
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+
+          # -- Liveness probe --
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Readiness probe --
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Environment variables --
+          env:
+            - name: SERVICE_NAME
+              value: "neurosphere-gateway"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: LOG_LEVEL
+
+          # -- Container security context --
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false

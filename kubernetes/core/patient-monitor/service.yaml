@@ -1,0 +1,29 @@
+# =============================================================================
+# NeuroSphere — Patient Monitor Service (ClusterIP)
+# =============================================================================
+# Internal service endpoint for the Patient Monitor.
+# Provides real-time patient vitals to other core services and the gateway.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: patient-monitor-service
+  namespace: neurosphere-core
+  labels:
+    app: patient-monitor-service
+    tier: backend
+    domain: patient-care
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "Internal endpoint for real-time patient vitals monitoring"
+spec:
+  type: ClusterIP
+  selector:
+    app: patient-monitor-service
+  ports:
+    - name: http
+      port: 5001
+      targetPort: 5001
+      protocol: TCP

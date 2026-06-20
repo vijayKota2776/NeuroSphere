@@ -1,0 +1,21 @@
+# =============================================================================
+# PodDisruptionBudget: robot-command-service
+# =============================================================================
+# Ensures at least 1 robot command pod remains available during voluntary
+# disruptions (node drains, cluster upgrades, maintenance windows).
+# Critical for maintaining robot control plane availability during updates.
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: robot-command-pdb
+  namespace: neurosphere-core
+  labels:
+    app: robot-command-service
+    component: disruption-budget
+    part-of: neurosphere
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: robot-command-service

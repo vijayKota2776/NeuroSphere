@@ -1,0 +1,78 @@
+# ================================
+# NeuroSphere — .gitignore
+# ================================
+
+# ── Sensitive / Private Files ──
+*.pem
+*.csv
+*.key
+*.secret
+*.env
+vault-keys.json
+
+# ── AWS ──
+AWSCLIV2.pkg
+*.pkg
+
+# ── Terraform ──
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+.terraform.lock.hcl
+
+# ── Docker ──
+docker-compose.override.yml
+
+# ── Node.js ──
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Logs ──
+*.log
+logs/
+
+# ── Vault ──
+vault-data/
+
+# ── Jenkins ──
+jenkins-data/
+
+# ── Monitoring ──
+prometheus-data/
+grafana-data/
+
+# ── Temporary ──
+tmp/
+temp/
+*.tmp
+ec2-userdata.sh

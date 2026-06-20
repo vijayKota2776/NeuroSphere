@@ -1,0 +1,42 @@
+# ============================================================================
+# NeuroSphere — Kibana Configuration
+# Healthcare Operations Dashboard & Log Exploration
+#
+# Access: http://localhost:5601
+# Provides real-time visibility into surgical robot operations,
+# patient monitoring alerts, and diagnostic pipeline status.
+# ============================================================================
+
+server.host: "0.0.0.0"
+server.port: 5601
+server.name: "neurosphere-kibana"
+
+# ---------------------------------------------------------------------------
+# Elasticsearch connection
+# ---------------------------------------------------------------------------
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+
+# ---------------------------------------------------------------------------
+# Monitoring — Container-aware metrics collection
+# ---------------------------------------------------------------------------
+monitoring.ui.container.elasticsearch.enabled: true
+
+# ---------------------------------------------------------------------------
+# Security Headers
+# X-Frame-Options prevents clickjacking (OWASP recommendation)
+# ---------------------------------------------------------------------------
+server.customResponseHeaders:
+  X-Frame-Options: "SAMEORIGIN"
+  X-Content-Type-Options: "nosniff"
+  Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+  X-XSS-Protection: "1; mode=block"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.root.level: info
+
+# ---------------------------------------------------------------------------
+# Default index pattern for NeuroSphere logs
+# ---------------------------------------------------------------------------
+# kibana.defaultAppId: "discover"

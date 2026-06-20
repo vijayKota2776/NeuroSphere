@@ -1,0 +1,118 @@
+# =============================================================================
+# NeuroSphere — Diagnostic Engine Service Deployment
+# =============================================================================
+# The Diagnostic Engine runs AI/ML inference pipelines for medical imaging
+# analysis, pathology classification, and surgical decision support. It
+# processes DICOM images, ultrasound frames, and endoscopic video feeds
+# to provide real-time diagnostic assistance during procedures.
+#
+# Compliance: FDA SaMD (Software as a Medical Device)
+# Criticality: HIGH — clinical decision support influences surgical workflow
+# Note: Higher resource limits allocated for ML model inference workloads
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diagnostic-engine-service
+  namespace: neurosphere-core
+  labels:
+    app: diagnostic-engine-service
+    tier: backend
+    domain: diagnostics
+    compliance: fda-samd
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "AI-powered diagnostic engine for medical imaging and pathology analysis"
+    compliance-standard: "FDA SaMD — Software as a Medical Device classification"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: diagnostic-engine-service
+  template:
+    metadata:
+      labels:
+        app: diagnostic-engine-service
+        tier: backend
+        domain: diagnostics
+        compliance: fda-samd
+        project: neurosphere
+      annotations:
+        # -- Prometheus scraping configuration --
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        runAsNonRoot: true
+
+      containers:
+        - name: diagnostic-engine-service
+          image: neurosphere/diagnostic-engine-service:latest
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+
+          # -- Higher resource allocation for AI/ML inference workloads --
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+
+          # -- Liveness probe: is the process alive? --
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Readiness probe: is the service ready to accept traffic? --
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Environment variables from ConfigMap --
+          env:
+            - name: SERVICE_NAME
+              value: "diagnostic-engine-service"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: LOG_LEVEL
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: NODE_ENV
+            - name: METRICS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: METRICS_ENABLED
+            - name: SERVICE_DISCOVERY_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: SERVICE_DISCOVERY_ENABLED
+
+          # -- Container security context --
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false

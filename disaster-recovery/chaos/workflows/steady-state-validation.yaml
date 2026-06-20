@@ -1,0 +1,402 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Steady-State Validation Workflow
+# =============================================================================
+# Purpose:    Define and validate steady-state hypotheses for all core
+#             NeuroSphere services. This workflow runs before and after
+#             every chaos experiment to confirm that the system returns
+#             to its expected operational baseline.
+#
+# Steady-State Definition:
+#   A NeuroSphere service is in "steady state" when:
+#   1. Health endpoint returns HTTP 200 (liveness)
+#   2. Ready endpoint returns HTTP 200 (readiness)
+#   3. Key Prometheus metrics are within expected ranges
+#   4. Request latency (p99) is below service-specific SLO
+#   5. Error rate is below 0.1% over the last 5 minutes
+#
+# Services Validated:
+#   - patient-monitor:    Vital signs monitoring (SLO: p99 < 100ms)
+#   - robot-command:      Surgical robot control  (SLO: p99 < 50ms)
+#   - diagnostic-engine:  Medical image analysis  (SLO: p99 < 2000ms)
+#   - telemetry-ingest:   Data ingestion pipeline (SLO: p99 < 200ms)
+#   - api-gateway:        External API gateway     (SLO: p99 < 300ms)
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: neurosphere-steady-state
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: validation
+    chaos.neurosphere.io/type: steady-state
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Comprehensive steady-state validation for all NeuroSphere core
+      services. Validates health, readiness, metrics, and latency SLOs.
+      Used as pre/post validation gate for all chaos experiments.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+spec:
+  entry: validate-all
+  templates:
+    # =========================================================================
+    # Root: Parallel validation of all services
+    # =========================================================================
+    - name: validate-all
+      templateType: Parallel
+      deadline: '2m'
+      children:
+        - check-patient-monitor
+        - check-robot-command
+        - check-diagnostics
+        - check-telemetry
+        - check-gateway
+
+    # =========================================================================
+    # Patient Monitor Service Validation
+    # =========================================================================
+    # Service: patient-monitor
+    # Function: Real-time patient vital signs monitoring
+    # SLO: p99 latency < 100ms, availability > 99.99%
+    # Critical: YES — patient safety depends on this service
+    # =========================================================================
+    - name: check-patient-monitor
+      templateType: Serial
+      deadline: '90s'
+      children:
+        - patient-monitor-health
+        - patient-monitor-ready
+        - patient-monitor-metrics
+
+    - name: patient-monitor-health
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://patient-monitor.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+          # Health response must include: {"status": "healthy"}
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: patient-monitor-ready
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://patient-monitor.neurosphere-core.svc:8080/ready
+          method: GET
+          criteria:
+            statusCode: "200"
+          # Ready response must include: {"ready": true, "dependencies": {...}}
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: patient-monitor-metrics
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          # Query Prometheus for patient-monitor p99 latency
+          url: >-
+            http://prometheus.neurosphere-monitoring.svc:9090/api/v1/query?query=
+            histogram_quantile(0.99,rate(neurosphere_patient_monitor_request_duration_seconds_bucket[5m]))
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 2
+        successThreshold: 2
+        recordsHistoryLimit: 5
+      deadline: '30s'
+
+    # =========================================================================
+    # Robot Command Service Validation
+    # =========================================================================
+    # Service: robot-command
+    # Function: Surgical robot command and control
+    # SLO: p99 latency < 50ms, availability > 99.999%
+    # Critical: YES — surgical safety depends on this service
+    # =========================================================================
+    - name: check-robot-command
+      templateType: Serial
+      deadline: '90s'
+      children:
+        - robot-command-health
+        - robot-command-ready
+        - robot-command-metrics
+
+    - name: robot-command-health
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://robot-command-service.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: robot-command-ready
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://robot-command-service.neurosphere-core.svc:8080/ready
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: robot-command-metrics
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: >-
+            http://prometheus.neurosphere-monitoring.svc:9090/api/v1/query?query=
+            histogram_quantile(0.99,rate(neurosphere_robot_command_latency_seconds_bucket[5m]))
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 2
+        successThreshold: 2
+        recordsHistoryLimit: 5
+      deadline: '30s'
+
+    # =========================================================================
+    # Diagnostic Engine Service Validation
+    # =========================================================================
+    # Service: diagnostic-engine
+    # Function: ML-based medical image analysis (CT, MRI, pathology)
+    # SLO: p99 latency < 2000ms, availability > 99.9%
+    # Critical: MEDIUM — degraded mode acceptable for non-urgent diagnostics
+    # =========================================================================
+    - name: check-diagnostics
+      templateType: Serial
+      deadline: '90s'
+      children:
+        - diagnostics-health
+        - diagnostics-ready
+        - diagnostics-metrics
+
+    - name: diagnostics-health
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://diagnostic-engine.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: diagnostics-ready
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://diagnostic-engine.neurosphere-core.svc:8080/ready
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: diagnostics-metrics
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: >-
+            http://prometheus.neurosphere-monitoring.svc:9090/api/v1/query?query=
+            histogram_quantile(0.99,rate(neurosphere_diagnostic_processing_duration_seconds_bucket[5m]))
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 2
+        successThreshold: 2
+        recordsHistoryLimit: 5
+      deadline: '30s'
+
+    # =========================================================================
+    # Telemetry Ingest Service Validation
+    # =========================================================================
+    # Service: telemetry-ingest
+    # Function: High-throughput telemetry data ingestion
+    # SLO: p99 latency < 200ms, availability > 99.95%
+    # Critical: MEDIUM — buffered via Kafka, brief outages tolerable
+    # =========================================================================
+    - name: check-telemetry
+      templateType: Serial
+      deadline: '90s'
+      children:
+        - telemetry-health
+        - telemetry-ready
+        - telemetry-metrics
+
+    - name: telemetry-health
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://telemetry-ingest.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: telemetry-ready
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://telemetry-ingest.neurosphere-core.svc:8080/ready
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: telemetry-metrics
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: >-
+            http://prometheus.neurosphere-monitoring.svc:9090/api/v1/query?query=
+            histogram_quantile(0.99,rate(neurosphere_telemetry_ingest_duration_seconds_bucket[5m]))
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 2
+        successThreshold: 2
+        recordsHistoryLimit: 5
+      deadline: '30s'
+
+    # =========================================================================
+    # API Gateway Validation
+    # =========================================================================
+    # Service: api-gateway
+    # Function: External-facing API gateway (Kong/Envoy)
+    # SLO: p99 latency < 300ms, availability > 99.95%
+    # Critical: HIGH — single entry point for all external traffic
+    # =========================================================================
+    - name: check-gateway
+      templateType: Serial
+      deadline: '90s'
+      children:
+        - gateway-health
+        - gateway-ready
+        - gateway-metrics
+
+    - name: gateway-health
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/health
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: gateway-ready
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: http://api-gateway.neurosphere-core.svc:8080/ready
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 2
+        successThreshold: 3
+        recordsHistoryLimit: 10
+      deadline: '30s'
+
+    - name: gateway-metrics
+      templateType: StatusCheck
+      statusCheck:
+        type: HTTP
+        mode: Continuous
+        http:
+          url: >-
+            http://prometheus.neurosphere-monitoring.svc:9090/api/v1/query?query=
+            histogram_quantile(0.99,rate(neurosphere_gateway_request_duration_seconds_bucket[5m]))
+          method: GET
+          criteria:
+            statusCode: "200"
+        intervalSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 2
+        successThreshold: 2
+        recordsHistoryLimit: 5
+      deadline: '30s'

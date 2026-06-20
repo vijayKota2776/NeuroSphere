@@ -1,0 +1,20 @@
+# =============================================================================
+# PodDisruptionBudget: gateway-service
+# =============================================================================
+# Ensures at least 1 API gateway pod remains during maintenance.
+# The gateway is the single entry point; losing it causes full outage.
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway-pdb
+  namespace: neurosphere-core
+  labels:
+    app: gateway-service
+    component: disruption-budget
+    part-of: neurosphere
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: gateway-service

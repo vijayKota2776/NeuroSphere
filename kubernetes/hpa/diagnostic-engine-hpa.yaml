@@ -1,0 +1,49 @@
+# =============================================================================
+# HorizontalPodAutoscaler: diagnostic-engine-service
+# =============================================================================
+# Autoscales the diagnostic AI engine. Lower CPU target (60%) because
+# AI/ML inference workloads are inherently CPU-intensive and sustained
+# high utilization degrades diagnostic accuracy and latency.
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: diagnostic-engine-hpa
+  namespace: neurosphere-core
+  labels:
+    app: diagnostic-engine-service
+    component: autoscaling
+    part-of: neurosphere
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: diagnostic-engine-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    # CPU target set lower (60%) — AI inference is CPU-bound; high utilization
+    # causes increased latency in diagnostic processing pipelines
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      # 300s stabilization — diagnostic jobs may be long-running; avoid
+      # disrupting in-flight analysis by scaling down too aggressively
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+      selectPolicy: Min

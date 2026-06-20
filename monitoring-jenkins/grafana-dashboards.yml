@@ -1,0 +1,11 @@
+apiVersion: 1
+providers:
+  - name: 'NeuroSphere'
+    orgId: 1
+    folder: 'NeuroSphere'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

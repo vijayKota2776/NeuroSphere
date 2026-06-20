@@ -1,0 +1,155 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Experiment: DNS Failure
+# =============================================================================
+# Purpose:    Inject DNS resolution failure by disrupting CoreDNS for
+#             1 minute. Validates that NeuroSphere services can tolerate
+#             brief DNS outages using cached DNS entries, and that service
+#             discovery auto-recovers when DNS is restored.
+#
+# Risk Level: HIGH
+# Blast Radius: Cluster-wide DNS resolution
+# Expected Outcome:
+#   - DNS queries fail for ~60 seconds
+#   - Services with DNS cache (ndots, TTL-based) continue operating
+#   - Services using persistent connections (gRPC, WebSocket) unaffected
+#   - New connection attempts may fail during the outage window
+#   - Alert fires: "CoreDNSUnavailable" within 15 seconds
+#   - DNS resolution resumes immediately when CoreDNS recovers
+#   - All services auto-recover without manual intervention
+#   - No patient data loss (in-flight requests use existing connections)
+#
+# Architecture Context:
+#   CoreDNS: 2 replicas in kube-system namespace
+#   DNS Cache: Node-local DNS cache (NodeLocal DNSCache) enabled
+#   Pod DNS Config: ndots=2, timeout=2, attempts=3
+#   Services using DNS: All inter-service communication via Kubernetes DNS
+#   Connection pools: gRPC (persistent), HTTP/2 (persistent), Redis (persistent)
+#
+# CRITICAL SAFETY:
+#   - DNS failure affects ALL services cluster-wide
+#   - Existing persistent connections are NOT affected
+#   - Only NEW DNS lookups fail during the outage
+#   - 1-minute duration is within NodeLocal DNS cache TTL (30s default)
+#   - This means services with NodeLocal DNS cache may not even notice
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - No active surgical procedures
+#   - NodeLocal DNSCache confirmed running on all nodes
+#   - Steady-state validation passes
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: DNSChaos
+metadata:
+  name: neurosphere-dns-failure
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: dns
+    chaos.neurosphere.io/risk-level: high
+    chaos.neurosphere.io/blast-radius: cluster-wide
+    chaos.neurosphere.io/requires-approval: "true"
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Injects DNS resolution failures for NeuroSphere services to test
+      service discovery resilience. Validates that cached DNS entries,
+      persistent connections, and NodeLocal DNS cache provide sufficient
+      protection during brief CoreDNS outages.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/dns-failure
+    chaos.neurosphere.io/jira: NEURO-CHAOS-007
+    chaos.neurosphere.io/safety-gate: surgical-procedure-check
+    chaos.neurosphere.io/expected-alerts: >-
+      CoreDNSUnavailable, DNSResolutionFailure, ServiceDiscoveryDegraded
+spec:
+  action: error
+  mode: all
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      project: neurosphere
+  duration: '1m'
+  # Patterns: Affect all DNS lookups for NeuroSphere services.
+  # Internal cluster DNS patterns that will fail to resolve.
+  patterns:
+    - "*.neurosphere-core.svc.cluster.local"
+    - "*.neurosphere-vault.svc.cluster.local"
+    - "*.neurosphere-data.svc.cluster.local"
+
+---
+# =============================================================================
+# Targeted DNS Failure: External DNS Only
+# =============================================================================
+# A less destructive variant that only affects external DNS resolution.
+# Internal service-to-service communication continues working.
+# Useful for testing external dependency resilience (cloud APIs, etc.).
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: DNSChaos
+metadata:
+  name: neurosphere-dns-failure-external
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: dns
+    chaos.neurosphere.io/risk-level: medium
+    chaos.neurosphere.io/blast-radius: external-dns
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Disrupts external DNS resolution only. Internal Kubernetes service
+      discovery continues to function. Tests resilience to external
+      dependency outages (cloud provider APIs, third-party services).
+    chaos.neurosphere.io/safety-gate: standard
+spec:
+  action: error
+  mode: all
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      project: neurosphere
+  duration: '1m'
+  # Only affect external DNS lookups, not internal cluster DNS
+  patterns:
+    - "*.amazonaws.com"
+    - "*.googleapis.com"
+    - "*.azure.com"
+    - "*.neurosphere.io"
+
+---
+# =============================================================================
+# DNS Latency Variant
+# =============================================================================
+# Instead of complete failure, inject DNS resolution latency.
+# This is a lower-risk alternative for initial chaos testing.
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: DNSChaos
+metadata:
+  name: neurosphere-dns-latency
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: dns
+    chaos.neurosphere.io/risk-level: low
+    chaos.neurosphere.io/blast-radius: cluster-wide
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Injects DNS resolution latency (not failure) to test timeout
+      handling and connection establishment under slow DNS conditions.
+    chaos.neurosphere.io/safety-gate: standard
+spec:
+  action: random
+  mode: all
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      project: neurosphere
+  duration: '2m'
+  patterns:
+    - "*.neurosphere-core.svc.cluster.local"

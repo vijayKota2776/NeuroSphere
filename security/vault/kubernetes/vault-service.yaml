@@ -1,0 +1,83 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Vault Kubernetes Services
+# =============================================================================
+# Two services are defined:
+#   1. vault (ClusterIP)  — API access on port 8200 for secret retrieval
+#   2. vault-internal (Headless) — Cluster communication on port 8201 for HA
+#
+# Service mesh integration: If using Istio/Linkerd, add appropriate
+# annotations to exclude Vault traffic from mTLS (Vault manages its own TLS).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Vault API Service (ClusterIP)
+# -----------------------------------------------------------------------------
+# Primary service for all Vault API interactions:
+#   - Secret read/write operations from microservices
+#   - Kubernetes auth login requests
+#   - Health checks and metrics scraping
+#   - UI access (when enabled)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: neurosphere-vault
+  labels:
+    app: vault
+    component: secrets-management
+    part-of: neurosphere
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8200"
+    prometheus.io/path: "/v1/sys/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: vault
+  ports:
+    - name: vault-api
+      port: 8200
+      targetPort: 8200
+      protocol: TCP
+    - name: vault-cluster
+      port: 8201
+      targetPort: 8201
+      protocol: TCP
+
+---
+# -----------------------------------------------------------------------------
+# Vault Internal Service (Headless)
+# -----------------------------------------------------------------------------
+# Headless service for Vault cluster communication:
+#   - Raft consensus (when using integrated storage)
+#   - Request forwarding between active and standby nodes
+#   - Cluster member discovery via DNS SRV records
+#
+# Each Vault pod gets a stable DNS name:
+#   vault-0.vault-internal.neurosphere-vault.svc.cluster.local
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-internal
+  namespace: neurosphere-vault
+  labels:
+    app: vault
+    component: secrets-management
+    part-of: neurosphere
+    vault-internal: "true"
+spec:
+  clusterIP: None  # Headless service
+  publishNotReadyAddresses: true  # Required for Raft join during init
+  selector:
+    app: vault
+  ports:
+    - name: vault-api
+      port: 8200
+      targetPort: 8200
+      protocol: TCP
+    - name: vault-cluster
+      port: 8201
+      targetPort: 8201
+      protocol: TCP

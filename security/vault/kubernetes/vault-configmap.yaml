@@ -1,0 +1,79 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Vault Configuration ConfigMap
+# =============================================================================
+# Contains the Vault server configuration (HCL format).
+# Mounted into the Vault container at /vault/config/vault-config.hcl
+#
+# Changes to this ConfigMap require a pod restart to take effect.
+# Use a rolling restart: kubectl rollout restart deployment/vault -n neurosphere-vault
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: neurosphere-vault
+  labels:
+    app: vault
+    component: configuration
+    part-of: neurosphere
+  annotations:
+    description: "Vault server HCL configuration for NeuroSphere platform"
+data:
+  vault-config.hcl: |
+    # =========================================================================
+    # NeuroSphere Vault Server Configuration
+    # =========================================================================
+    # Healthcare-grade secret management with HIPAA compliance controls.
+    # =========================================================================
+
+    ui = true
+    cluster_name = "neurosphere-vault"
+
+    # -----------------------------------------------------------------------
+    # Storage Backend — File (Dev/Staging)
+    # -----------------------------------------------------------------------
+    # PRODUCTION: Switch to Raft integrated storage for HA:
+    #   storage "raft" {
+    #     path    = "/vault/data"
+    #     node_id = "vault-0"
+    #   }
+    # -----------------------------------------------------------------------
+    storage "file" {
+      path = "/vault/data"
+    }
+
+    # -----------------------------------------------------------------------
+    # TCP Listener
+    # -----------------------------------------------------------------------
+    # PRODUCTION: Enable TLS (tls_disable = 0) with valid certificates.
+    # HIPAA §164.312(e)(1): Transmission security for PHI.
+    # -----------------------------------------------------------------------
+    listener "tcp" {
+      address     = "0.0.0.0:8200"
+      tls_disable = 1
+
+      # Uncomment for production TLS:
+      # tls_cert_file   = "/vault/tls/vault-cert.pem"
+      # tls_key_file    = "/vault/tls/vault-key.pem"
+      # tls_min_version = "tls12"
+    }
+
+    # -----------------------------------------------------------------------
+    # Telemetry — Prometheus
+    # -----------------------------------------------------------------------
+    telemetry {
+      prometheus_retention_time = "30s"
+      disable_hostname         = true
+    }
+
+    # -----------------------------------------------------------------------
+    # Addresses
+    # -----------------------------------------------------------------------
+    api_addr     = "http://0.0.0.0:8200"
+    cluster_addr = "https://0.0.0.0:8201"
+
+    # -----------------------------------------------------------------------
+    # Lease Configuration
+    # -----------------------------------------------------------------------
+    max_lease_ttl     = "768h"   # 32 days
+    default_lease_ttl = "168h"   # 7 days

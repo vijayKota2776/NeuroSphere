@@ -1,0 +1,282 @@
+###############################################################################
+# NeuroSphere Medical Robotics — Automated Backup CronJob
+#
+# Schedule: Daily at 02:00 UTC
+# Runs etcd, Vault, and database backups in sequence.
+#
+# HIPAA Compliance:
+#   - ServiceAccount with least-privilege S3 write access
+#   - Audit logs collected by Fluent Bit sidecar
+#   - Secrets injected from Vault via init container
+#   - No PHI stored in pod spec or ConfigMap
+###############################################################################
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurosphere-backup
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    app.kubernetes.io/component: disaster-recovery
+    compliance.neurosphere.io/hipaa: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: neurosphere-backup-agent
+  namespace: neurosphere-backup
+  labels:
+    app.kubernetes.io/name: backup-agent
+    app.kubernetes.io/part-of: neurosphere
+  annotations:
+    # EKS IAM Role for Service Account (IRSA) — grants S3 write access
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/neurosphere-backup-agent-role
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-config
+  namespace: neurosphere-backup
+  labels:
+    app.kubernetes.io/name: backup-agent
+    app.kubernetes.io/part-of: neurosphere
+data:
+  NEUROSPHERE_ENV: "production"
+  CLUSTER_NAME: "neurosphere-production"
+  BACKUP_RETENTION_COUNT: "30"
+  ETCD_ENDPOINTS: "https://etcd.neurosphere.internal:2379"
+  VAULT_ADDR: "https://vault.neurosphere.internal:8200"
+  GPG_RECIPIENT: "neurosphere-backup@neurosphere.io"
+  # Database hosts
+  ROBOT_DB_HOST: "robot-db.neurosphere.internal"
+  PATIENT_DB_HOST: "patient-db.neurosphere.internal"
+  TELEMETRY_DB_HOST: "telemetry-db.neurosphere.internal"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: neurosphere-backup
+  namespace: neurosphere-backup
+  labels:
+    app.kubernetes.io/name: backup-agent
+    app.kubernetes.io/part-of: neurosphere
+    app.kubernetes.io/component: disaster-recovery
+  annotations:
+    description: "Daily backup of etcd, Vault, and PostgreSQL databases"
+    compliance.neurosphere.io/hipaa: "true"
+spec:
+  # ┌───────────── minute (0)
+  # │ ┌─────────── hour (2 AM UTC)
+  # │ │ ┌───────── day of month (every day)
+  # │ │ │ ┌─────── month (every month)
+  # │ │ │ │ ┌───── day of week (every day)
+  schedule: "0 2 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid           # Never run concurrent backups
+  successfulJobsHistoryLimit: 7        # Keep last 7 successful job records
+  failedJobsHistoryLimit: 14           # Keep last 14 failed job records
+  startingDeadlineSeconds: 300         # Fail if job can't start within 5 min
+  suspend: false
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backup-agent
+        app.kubernetes.io/part-of: neurosphere
+        app.kubernetes.io/component: disaster-recovery
+    spec:
+      backoffLimit: 2                   # Retry up to 2 times on failure
+      activeDeadlineSeconds: 7200       # Max 2 hours for entire backup
+      ttlSecondsAfterFinished: 86400    # Cleanup completed pods after 24h
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup-agent
+            app.kubernetes.io/part-of: neurosphere
+            sidecar.istio.io/inject: "false"  # No service mesh for batch jobs
+          annotations:
+            prometheus.io/scrape: "false"
+            cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+        spec:
+          serviceAccountName: neurosphere-backup-agent
+          restartPolicy: OnFailure
+
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+
+          # Init container: Inject secrets from Vault
+          initContainers:
+            - name: vault-agent-init
+              image: hashicorp/vault:1.15
+              command:
+                - sh
+                - -c
+                - |
+                  vault agent -config=/vault/config/agent.hcl -exit-after-auth
+              envFrom:
+                - configMapRef:
+                    name: backup-config
+              volumeMounts:
+                - name: vault-agent-config
+                  mountPath: /vault/config
+                - name: vault-secrets
+                  mountPath: /vault/secrets
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+
+          containers:
+            - name: backup-agent
+              image: neurosphere/backup-agent:1.0.0
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  echo "Starting NeuroSphere backup sequence..."
+
+                  # Source database credentials from Vault-injected secrets
+                  if [[ -f /vault/secrets/db-credentials.env ]]; then
+                    source /vault/secrets/db-credentials.env
+                  fi
+
+                  # Step 1: etcd backup
+                  echo "=== Phase 1: etcd Backup ==="
+                  /scripts/backup-etcd.sh
+                  ETCD_EXIT=$?
+
+                  # Step 2: Vault backup
+                  echo "=== Phase 2: Vault Backup ==="
+                  /scripts/backup-vault.sh
+                  VAULT_EXIT=$?
+
+                  # Step 3: Database backups
+                  echo "=== Phase 3: Database Backups ==="
+                  /scripts/backup-databases.sh
+                  DB_EXIT=$?
+
+                  # Report results
+                  echo "=== Backup Results ==="
+                  echo "  etcd:      exit ${ETCD_EXIT}"
+                  echo "  Vault:     exit ${VAULT_EXIT}"
+                  echo "  Databases: exit ${DB_EXIT}"
+
+                  # If any backup failed, send failure notification
+                  if [[ ${ETCD_EXIT} -ne 0 || ${VAULT_EXIT} -ne 0 || ${DB_EXIT} -ne 0 ]]; then
+                    echo "One or more backups FAILED — sending alert..."
+                    aws sns publish \
+                      --topic-arn "${SNS_TOPIC_ARN}" \
+                      --subject "[ALERT] NeuroSphere backup failure - ${NEUROSPHERE_ENV}" \
+                      --message "Backup failures: etcd=${ETCD_EXIT}, vault=${VAULT_EXIT}, db=${DB_EXIT}" \
+                      --region us-east-1 || true
+                    exit 1
+                  fi
+
+                  echo "All backups completed successfully."
+
+              envFrom:
+                - configMapRef:
+                    name: backup-config
+              env:
+                - name: SNS_TOPIC_ARN
+                  value: "arn:aws:sns:us-east-1:ACCOUNT_ID:neurosphere-production-ops-alerts"
+                - name: KMS_KEY_ID
+                  value: "alias/neurosphere-production-dr"
+                - name: GPG_HOMEDIR
+                  value: "/gpg"
+                - name: OPERATOR
+                  value: "system/k8s-cronjob"
+
+              volumeMounts:
+                - name: backup-scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: vault-secrets
+                  mountPath: /vault/secrets
+                  readOnly: true
+                - name: gpg-keyring
+                  mountPath: /gpg
+                  readOnly: true
+                - name: etcd-certs
+                  mountPath: /etc/kubernetes/pki/etcd
+                  readOnly: true
+                - name: temp-storage
+                  mountPath: /tmp
+                - name: log-storage
+                  mountPath: /var/log/neurosphere
+
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 512Mi
+                  ephemeral-storage: 5Gi
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
+                  ephemeral-storage: 20Gi
+
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false   # Needs /tmp and /var/log writes
+                capabilities:
+                  drop: ["ALL"]
+
+          volumes:
+            - name: backup-scripts
+              configMap:
+                name: backup-scripts
+                defaultMode: 0755
+            - name: vault-agent-config
+              configMap:
+                name: vault-agent-config
+            - name: vault-secrets
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Mi
+            - name: gpg-keyring
+              secret:
+                secretName: neurosphere-gpg-keyring
+                defaultMode: 0600
+            - name: etcd-certs
+              secret:
+                secretName: etcd-client-certs
+                defaultMode: 0600
+            - name: temp-storage
+              emptyDir:
+                sizeLimit: 10Gi
+            - name: log-storage
+              emptyDir:
+                sizeLimit: 256Mi
+
+          # Prefer nodes with SSD for faster I/O during backups
+          affinity:
+            nodeAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  preference:
+                    matchExpressions:
+                      - key: node.kubernetes.io/instance-type
+                        operator: In
+                        values:
+                          - m5.xlarge
+                          - m5.2xlarge
+
+          tolerations:
+            - key: "dedicated"
+              operator: "Equal"
+              value: "backup"
+              effect: "NoSchedule"

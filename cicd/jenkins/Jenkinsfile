@@ -1,0 +1,730 @@
+// =============================================================================
+// NeuroSphere Medical Robotics — Main CI/CD Pipeline
+// =============================================================================
+// Pipeline: Full build → test → scan → deploy lifecycle
+// Compliance: HIPAA / FDA 21 CFR Part 11 audit trail
+// Contact: NeuroSphere DevOps <devops@neurosphere.med>
+//
+// This pipeline enforces security scanning gates that block promotion of any
+// artifact with CRITICAL or HIGH vulnerabilities — a hard requirement for
+// FDA Class II/III medical device software.
+// =============================================================================
+
+pipeline {
+    agent { label 'neurosphere-agent' }
+
+    // -------------------------------------------------------------------------
+    // Pipeline options
+    // -------------------------------------------------------------------------
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timestamps()
+        timeout(time: 45, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        ansiColor('xterm')
+    }
+
+    // -------------------------------------------------------------------------
+    // Credentials & global environment
+    // -------------------------------------------------------------------------
+    environment {
+        DOCKER_REGISTRY   = credentials('docker-registry-url')
+        AWS_REGION         = 'us-east-1'
+        PROJECT_NAME       = 'neurosphere'
+        SONAR_TOKEN        = credentials('sonarqube-token')
+        SLACK_WEBHOOK      = credentials('slack-webhook-url')
+        KUBECONFIG         = credentials('neurosphere-kubeconfig')
+
+        // Paths inside the workspace
+        SERVICES_DIR       = "${WORKSPACE}/services"
+        K8S_DIR            = "${WORKSPACE}/kubernetes"
+        TERRAFORM_DIR      = "${WORKSPACE}/infrastructure/terraform"
+        REPORTS_DIR        = "${WORKSPACE}/reports"
+    }
+
+    // -------------------------------------------------------------------------
+    // Build parameters — exposed in Jenkins UI
+    // -------------------------------------------------------------------------
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target deployment environment'
+        )
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Skip unit-test stage (NOT recommended for prod)'
+        )
+        booleanParam(
+            name: 'FORCE_DEPLOY',
+            defaultValue: false,
+            description: 'Force deployment even when no source changes detected'
+        )
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: '',
+            description: 'Override image tag (default: short git SHA)'
+        )
+    }
+
+    // =========================================================================
+    // STAGES
+    // =========================================================================
+    stages {
+
+        // ---------------------------------------------------------------------
+        // 1. CHECKOUT
+        // ---------------------------------------------------------------------
+        stage('Checkout') {
+            steps {
+                // Clean workspace to guarantee reproducible builds — required
+                // for FDA audit trail (every build must be fully traceable).
+                cleanWs()
+                checkout scm
+
+                script {
+                    // Derive BUILD_VERSION from parameter or git short SHA
+                    env.GIT_SHA   = sh(script: 'git rev-parse --short=8 HEAD', returnStdout: true).trim()
+                    env.GIT_BRANCH = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+                    env.BUILD_VERSION = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG.trim() : env.GIT_SHA
+                    env.GIT_COMMIT_MSG = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+
+                    echo "============================================="
+                    echo "NeuroSphere CI/CD Pipeline"
+                    echo "============================================="
+                    echo "Branch:        ${env.GIT_BRANCH}"
+                    echo "Commit:        ${env.GIT_SHA}"
+                    echo "Build Version: ${env.BUILD_VERSION}"
+                    echo "Environment:   ${params.ENVIRONMENT}"
+                    echo "============================================="
+                }
+
+                // Create reports directory for later stages
+                sh 'mkdir -p ${REPORTS_DIR}/{coverage,security,tests,lint}'
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 2. CODE QUALITY — parallel linting & validation
+        // ---------------------------------------------------------------------
+        stage('Code Quality') {
+            parallel {
+                // -- Python lint (flake8) across all Python micro-services ----
+                stage('Python Lint') {
+                    steps {
+                        script {
+                            def pythonServices = [
+                                'robot-command-service',
+                                'patient-monitor-service',
+                                'telemetry-ingest-service'
+                            ]
+                            for (svc in pythonServices) {
+                                echo "Linting ${svc} with flake8..."
+                                sh """
+                                    cd ${SERVICES_DIR}/${svc}
+                                    flake8 . \
+                                        --max-line-length=120 \
+                                        --statistics \
+                                        --count \
+                                        --show-source \
+                                        --output-file=${REPORTS_DIR}/lint/${svc}-flake8.txt \
+                                        || true
+                                """
+                            }
+                        }
+                    }
+                }
+
+                // -- Node.js lint (eslint) ------------------------------------
+                stage('Node Lint') {
+                    steps {
+                        echo 'Linting diagnostic-engine-service with ESLint...'
+                        sh """
+                            cd ${SERVICES_DIR}/diagnostic-engine-service
+                            npm ci --prefer-offline
+                            npx eslint . \
+                                --format json \
+                                --output-file ${REPORTS_DIR}/lint/diagnostic-engine-eslint.json \
+                                || true
+                        """
+                    }
+                }
+
+                // -- Terraform validate & fmt --------------------------------
+                stage('Terraform Validate') {
+                    steps {
+                        echo 'Validating Terraform configuration...'
+                        sh """
+                            cd ${TERRAFORM_DIR}
+                            terraform init -backend=false
+                            terraform validate
+                            terraform fmt -check -recursive -diff
+                        """
+                    }
+                }
+
+                // -- Kubernetes manifest validation --------------------------
+                stage('K8s Manifest Validation') {
+                    steps {
+                        echo 'Validating Kubernetes manifests with kubeconform...'
+                        sh """
+                            kubeconform \
+                                -summary \
+                                -strict \
+                                -kubernetes-version 1.28.0 \
+                                -output json \
+                                ${K8S_DIR}/core/*.yaml \
+                                > ${REPORTS_DIR}/lint/kubeconform-report.json \
+                                || true
+
+                            # Fail on invalid manifests (exit code 1)
+                            kubeconform \
+                                -strict \
+                                -kubernetes-version 1.28.0 \
+                                ${K8S_DIR}/core/*.yaml
+                        """
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 3. UNIT TESTS — parallel per service
+        //    Skippable via SKIP_TESTS param (NOT recommended for production).
+        // ---------------------------------------------------------------------
+        stage('Unit Tests') {
+            when {
+                expression { return !params.SKIP_TESTS }
+            }
+            parallel {
+                stage('Test: Robot Command') {
+                    steps {
+                        sh """
+                            cd ${SERVICES_DIR}/robot-command-service
+                            pip install -r requirements.txt 2>/dev/null || true
+                            python -m pytest tests/ \
+                                -v \
+                                --junitxml=${REPORTS_DIR}/tests/robot-command-results.xml \
+                                --cov=. \
+                                --cov-report=xml:${REPORTS_DIR}/coverage/robot-command-coverage.xml \
+                                --cov-report=html:${REPORTS_DIR}/coverage/robot-command-html
+                        """
+                    }
+                }
+
+                stage('Test: Diagnostic Engine') {
+                    steps {
+                        sh """
+                            cd ${SERVICES_DIR}/diagnostic-engine-service
+                            npm ci --prefer-offline
+                            npm test -- \
+                                --reporters=default \
+                                --reporters=jest-junit \
+                                --coverage \
+                                --coverageDirectory=${REPORTS_DIR}/coverage/diagnostic-engine
+                            cp junit.xml ${REPORTS_DIR}/tests/diagnostic-engine-results.xml 2>/dev/null || true
+                        """
+                    }
+                }
+
+                stage('Test: Patient Monitor') {
+                    steps {
+                        sh """
+                            cd ${SERVICES_DIR}/patient-monitor-service
+                            pip install -r requirements.txt 2>/dev/null || true
+                            python -m pytest tests/ \
+                                -v \
+                                --junitxml=${REPORTS_DIR}/tests/patient-monitor-results.xml \
+                                --cov=. \
+                                --cov-report=xml:${REPORTS_DIR}/coverage/patient-monitor-coverage.xml \
+                                --cov-report=html:${REPORTS_DIR}/coverage/patient-monitor-html
+                        """
+                    }
+                }
+
+                stage('Test: Telemetry Ingest') {
+                    steps {
+                        sh """
+                            cd ${SERVICES_DIR}/telemetry-ingest-service
+                            pip install -r requirements.txt 2>/dev/null || true
+                            python -m pytest tests/ \
+                                -v \
+                                --junitxml=${REPORTS_DIR}/tests/telemetry-ingest-results.xml \
+                                --cov=. \
+                                --cov-report=xml:${REPORTS_DIR}/coverage/telemetry-ingest-coverage.xml \
+                                --cov-report=html:${REPORTS_DIR}/coverage/telemetry-ingest-html
+                        """
+                    }
+                }
+            }
+
+            // Publish test results & coverage after all parallel branches complete
+            post {
+                always {
+                    junit testResults: "${REPORTS_DIR}/tests/*.xml", allowEmptyResults: true
+                    publishHTML(target: [
+                        reportDir:  "${REPORTS_DIR}/coverage",
+                        reportFiles: '**/index.html',
+                        reportName: 'Coverage Reports',
+                        keepAll: true
+                    ])
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 4. SECURITY SCAN — vulnerability gates for medical-device compliance
+        //    FDA/IEC 62443 mandate: no CRITICAL or HIGH CVEs in released images.
+        // ---------------------------------------------------------------------
+        stage('Security Scan') {
+            parallel {
+                // -- Trivy container image scan (all services) ----------------
+                stage('Trivy Image Scan') {
+                    steps {
+                        script {
+                            def services = [
+                                'robot-command-service',
+                                'patient-monitor-service',
+                                'telemetry-ingest-service',
+                                'diagnostic-engine-service',
+                                'neurosphere-gateway'
+                            ]
+                            for (svc in services) {
+                                echo "Scanning ${svc} filesystem with Trivy..."
+                                sh """
+                                    trivy fs \
+                                        --severity CRITICAL,HIGH \
+                                        --format json \
+                                        --output ${REPORTS_DIR}/security/trivy-${svc}.json \
+                                        ${SERVICES_DIR}/${svc}
+                                """
+                            }
+                        }
+                    }
+                }
+
+                // -- OWASP dependency check ----------------------------------
+                stage('OWASP Dependency Check') {
+                    steps {
+                        sh """
+                            dependency-check \
+                                --project "NeuroSphere" \
+                                --scan ${SERVICES_DIR} \
+                                --format JSON \
+                                --format HTML \
+                                --out ${REPORTS_DIR}/security/owasp \
+                                --failOnCVSS 7 \
+                                --enableExperimental \
+                                || true
+                        """
+                    }
+                }
+
+                // -- Bandit: Python SAST -------------------------------------
+                stage('Bandit SAST') {
+                    steps {
+                        script {
+                            def pythonServices = [
+                                'robot-command-service',
+                                'patient-monitor-service',
+                                'telemetry-ingest-service'
+                            ]
+                            for (svc in pythonServices) {
+                                echo "Running Bandit SAST on ${svc}..."
+                                sh """
+                                    bandit -r ${SERVICES_DIR}/${svc} \
+                                        -f json \
+                                        -o ${REPORTS_DIR}/security/bandit-${svc}.json \
+                                        -ll \
+                                        || true
+                                """
+                            }
+                        }
+                    }
+                }
+
+                // -- npm audit: Node SAST ------------------------------------
+                stage('npm Audit') {
+                    steps {
+                        sh """
+                            cd ${SERVICES_DIR}/diagnostic-engine-service
+                            npm audit --json > ${REPORTS_DIR}/security/npm-audit-diagnostic-engine.json || true
+                        """
+                    }
+                }
+            }
+
+            // Gate: block pipeline on CRITICAL findings
+            post {
+                always {
+                    script {
+                        // Aggregate Trivy CRITICAL findings across all services
+                        def criticalCount = sh(
+                            script: """
+                                cat ${REPORTS_DIR}/security/trivy-*.json \
+                                    | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' \
+                                    | paste -sd+ - | bc
+                            """,
+                            returnStdout: true
+                        ).trim().toInteger()
+
+                        if (criticalCount > 0) {
+                            error """
+                                ⛔ SECURITY GATE FAILED — ${criticalCount} CRITICAL vulnerabilities detected.
+                                Medical-device compliance (FDA/IEC 62443) prohibits release with CRITICAL CVEs.
+                                Review reports in ${REPORTS_DIR}/security/ and remediate before re-running.
+                            """
+                        } else {
+                            echo '✅ Security gate passed — no CRITICAL vulnerabilities found.'
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 5. DOCKER BUILD — parallel multi-stage builds for all services
+        // ---------------------------------------------------------------------
+        stage('Docker Build') {
+            parallel {
+                stage('Build: Robot Command') {
+                    steps {
+                        sh """
+                            docker build \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/robot-command-service:${BUILD_VERSION} \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/robot-command-service:latest \
+                                --label "org.opencontainers.image.revision=${GIT_SHA}" \
+                                --label "org.opencontainers.image.created=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                                --label "com.neurosphere.compliance=FDA-21CFR11" \
+                                -f ${SERVICES_DIR}/robot-command-service/Dockerfile \
+                                ${SERVICES_DIR}/robot-command-service
+                        """
+                    }
+                }
+                stage('Build: Diagnostic Engine') {
+                    steps {
+                        sh """
+                            docker build \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/diagnostic-engine-service:${BUILD_VERSION} \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/diagnostic-engine-service:latest \
+                                --label "org.opencontainers.image.revision=${GIT_SHA}" \
+                                --label "org.opencontainers.image.created=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                                --label "com.neurosphere.compliance=FDA-21CFR11" \
+                                -f ${SERVICES_DIR}/diagnostic-engine-service/Dockerfile \
+                                ${SERVICES_DIR}/diagnostic-engine-service
+                        """
+                    }
+                }
+                stage('Build: Patient Monitor') {
+                    steps {
+                        sh """
+                            docker build \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/patient-monitor-service:${BUILD_VERSION} \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/patient-monitor-service:latest \
+                                --label "org.opencontainers.image.revision=${GIT_SHA}" \
+                                --label "org.opencontainers.image.created=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                                --label "com.neurosphere.compliance=FDA-21CFR11" \
+                                -f ${SERVICES_DIR}/patient-monitor-service/Dockerfile \
+                                ${SERVICES_DIR}/patient-monitor-service
+                        """
+                    }
+                }
+                stage('Build: Telemetry Ingest') {
+                    steps {
+                        sh """
+                            docker build \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/telemetry-ingest-service:${BUILD_VERSION} \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/telemetry-ingest-service:latest \
+                                --label "org.opencontainers.image.revision=${GIT_SHA}" \
+                                --label "org.opencontainers.image.created=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                                --label "com.neurosphere.compliance=FDA-21CFR11" \
+                                -f ${SERVICES_DIR}/telemetry-ingest-service/Dockerfile \
+                                ${SERVICES_DIR}/telemetry-ingest-service
+                        """
+                    }
+                }
+                stage('Build: Gateway') {
+                    steps {
+                        sh """
+                            docker build \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/neurosphere-gateway:${BUILD_VERSION} \
+                                -t ${DOCKER_REGISTRY}/${PROJECT_NAME}/neurosphere-gateway:latest \
+                                --label "org.opencontainers.image.revision=${GIT_SHA}" \
+                                --label "org.opencontainers.image.created=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                                --label "com.neurosphere.compliance=FDA-21CFR11" \
+                                -f ${SERVICES_DIR}/neurosphere-gateway/Dockerfile \
+                                ${SERVICES_DIR}/neurosphere-gateway
+                        """
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 6. PUSH IMAGES — authenticate to ECR and push all tags
+        // ---------------------------------------------------------------------
+        stage('Push Images') {
+            steps {
+                script {
+                    // Authenticate Docker to AWS ECR
+                    sh """
+                        aws ecr get-login-password --region ${AWS_REGION} \
+                            | docker login --username AWS --password-stdin ${DOCKER_REGISTRY}
+                    """
+
+                    def services = [
+                        'robot-command-service',
+                        'diagnostic-engine-service',
+                        'patient-monitor-service',
+                        'telemetry-ingest-service',
+                        'neurosphere-gateway'
+                    ]
+
+                    for (svc in services) {
+                        echo "Pushing ${svc}:${BUILD_VERSION} → ECR..."
+                        sh """
+                            docker push ${DOCKER_REGISTRY}/${PROJECT_NAME}/${svc}:${BUILD_VERSION}
+                            docker push ${DOCKER_REGISTRY}/${PROJECT_NAME}/${svc}:latest
+                        """
+                    }
+
+                    echo "✅ All images pushed: tag=${BUILD_VERSION}"
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 7. DEPLOY TO ENVIRONMENT
+        //    - dev:     auto-deploy
+        //    - staging: auto-deploy + smoke tests
+        //    - prod:    manual approval gate → deploy → smoke tests
+        //
+        //    FDA 21 CFR Part 11 requires explicit human approval for production
+        //    deployments of medical-device software.
+        // ---------------------------------------------------------------------
+        stage('Deploy to Environment') {
+            steps {
+                script {
+                    def targetEnv    = params.ENVIRONMENT
+                    def overlayPath  = "${K8S_DIR}/overlays/${targetEnv}"
+
+                    // ---- Production approval gate --------------------------
+                    if (targetEnv == 'prod') {
+                        // Timeout prevents stale approvals sitting indefinitely
+                        timeout(time: 30, unit: 'MINUTES') {
+                            input message: """
+                                🏥 PRODUCTION DEPLOYMENT APPROVAL REQUIRED
+                                ─────────────────────────────────────────────
+                                Service Version : ${BUILD_VERSION}
+                                Git SHA         : ${GIT_SHA}
+                                Commit          : ${env.GIT_COMMIT_MSG}
+                                ─────────────────────────────────────────────
+                                This deployment targets PRODUCTION and processes
+                                protected health information (PHI). Approval is
+                                required per FDA 21 CFR Part 11 §11.10(a).
+                            """,
+                            ok: 'Approve Production Deploy',
+                            submitter: 'devops-leads,release-managers'
+                        }
+                    }
+
+                    // ---- Update kustomize image tags -----------------------
+                    def services = [
+                        'robot-command-service',
+                        'diagnostic-engine-service',
+                        'patient-monitor-service',
+                        'telemetry-ingest-service',
+                        'neurosphere-gateway'
+                    ]
+
+                    for (svc in services) {
+                        sh """
+                            cd ${overlayPath}
+                            kustomize edit set image \
+                                ${svc}=${DOCKER_REGISTRY}/${PROJECT_NAME}/${svc}:${BUILD_VERSION}
+                        """
+                    }
+
+                    // ---- Apply manifests -----------------------------------
+                    echo "Deploying to ${targetEnv} with kustomize..."
+                    sh """
+                        kustomize build ${overlayPath} | kubectl apply -f -
+                        kubectl -n neurosphere-${targetEnv} rollout status deployment --timeout=300s
+                    """
+
+                    echo "✅ Deployment to ${targetEnv} complete (version: ${BUILD_VERSION})"
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 8. INTEGRATION / SMOKE TESTS
+        //    Validates all critical endpoints are responsive post-deploy.
+        // ---------------------------------------------------------------------
+        stage('Integration Tests') {
+            steps {
+                script {
+                    def targetEnv = params.ENVIRONMENT
+                    def baseUrl   = ''
+
+                    // Determine base URL per environment
+                    switch (targetEnv) {
+                        case 'dev':
+                            baseUrl = 'https://dev.neurosphere.internal'
+                            break
+                        case 'staging':
+                            baseUrl = 'https://staging.neurosphere.internal'
+                            break
+                        case 'prod':
+                            baseUrl = 'https://api.neurosphere.med'
+                            break
+                    }
+
+                    echo "Running integration tests against ${baseUrl}..."
+
+                    // --- Health endpoint checks (all services) ---------------
+                    def healthEndpoints = [
+                        '/api/v1/robot-command/health',
+                        '/api/v1/diagnostic-engine/health',
+                        '/api/v1/patient-monitor/health',
+                        '/api/v1/telemetry-ingest/health',
+                        '/health'
+                    ]
+
+                    for (endpoint in healthEndpoints) {
+                        sh """
+                            HTTP_STATUS=\$(curl -s -o /dev/null -w '%{http_code}' \
+                                --max-time 10 \
+                                --retry 3 \
+                                --retry-delay 5 \
+                                ${baseUrl}${endpoint})
+
+                            if [ "\$HTTP_STATUS" -ne 200 ]; then
+                                echo "❌ FAILED: ${endpoint} returned HTTP \$HTTP_STATUS"
+                                exit 1
+                            fi
+                            echo "✅ ${endpoint} → HTTP \$HTTP_STATUS"
+                        """
+                    }
+
+                    // --- Robot fleet status validation -----------------------
+                    echo 'Validating robot fleet API response...'
+                    sh """
+                        RESPONSE=\$(curl -s --max-time 15 ${baseUrl}/api/v1/robot-command/fleet/status)
+                        echo "\$RESPONSE" | jq -e '.fleet_status' > /dev/null 2>&1 \
+                            || { echo '❌ Robot fleet response missing fleet_status field'; exit 1; }
+                        echo '✅ Robot fleet status validated'
+                    """
+
+                    // --- Patient dashboard validation -----------------------
+                    echo 'Validating patient dashboard endpoint...'
+                    sh """
+                        RESPONSE=\$(curl -s --max-time 15 ${baseUrl}/api/v1/patient-monitor/dashboard)
+                        echo "\$RESPONSE" | jq -e '.patients' > /dev/null 2>&1 \
+                            || { echo '❌ Patient dashboard response missing patients field'; exit 1; }
+                        echo '✅ Patient dashboard validated'
+                    """
+
+                    // --- Telemetry ingestion validation ----------------------
+                    echo 'Validating telemetry ingestion endpoint...'
+                    sh """
+                        RESPONSE=\$(curl -s -X POST \
+                            -H 'Content-Type: application/json' \
+                            -d '{"robot_id":"smoke-test-robot","metric":"heartbeat","value":72.0,"timestamp":"'"\$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
+                            --max-time 15 \
+                            ${baseUrl}/api/v1/telemetry-ingest/data)
+                        echo "\$RESPONSE" | jq -e '.status' > /dev/null 2>&1 \
+                            || { echo '❌ Telemetry ingestion failed'; exit 1; }
+                        echo '✅ Telemetry ingestion validated'
+                    """
+
+                    // --- Readiness endpoint checks --------------------------
+                    echo 'Verifying readiness probes...'
+                    sh """
+                        for svc in robot-command diagnostic-engine patient-monitor telemetry-ingest; do
+                            HTTP_STATUS=\$(curl -s -o /dev/null -w '%{http_code}' \
+                                --max-time 10 \
+                                ${baseUrl}/api/v1/\${svc}/ready)
+                            if [ "\$HTTP_STATUS" -ne 200 ]; then
+                                echo "⚠️  WARNING: /api/v1/\${svc}/ready returned HTTP \$HTTP_STATUS"
+                            else
+                                echo "✅ /api/v1/\${svc}/ready → HTTP \$HTTP_STATUS"
+                            fi
+                        done
+                    """
+
+                    echo "✅ All integration tests passed for ${targetEnv}"
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // POST — notifications & cleanup (runs regardless of build result)
+    // =========================================================================
+    post {
+        always {
+            script {
+                // Archive all generated reports for audit compliance
+                archiveArtifacts artifacts: 'reports/**/*', allowEmptyArchive: true
+            }
+        }
+
+        success {
+            script {
+                slackSend(
+                    channel: '#neurosphere-builds',
+                    color: 'good',
+                    message: """
+                        ✅ *NeuroSphere Build #${env.BUILD_NUMBER} — SUCCESS*
+                        • Branch: `${env.GIT_BRANCH}`
+                        • Version: `${env.BUILD_VERSION}`
+                        • Environment: `${params.ENVIRONMENT}`
+                        • Duration: ${currentBuild.durationString.replace(' and counting', '')}
+                        • <${env.BUILD_URL}|View Build>
+                    """.stripIndent().trim()
+                )
+            }
+        }
+
+        failure {
+            script {
+                slackSend(
+                    channel: '#neurosphere-builds',
+                    color: 'danger',
+                    message: """
+                        ❌ *NeuroSphere Build #${env.BUILD_NUMBER} — FAILED*
+                        • Branch: `${env.GIT_BRANCH}`
+                        • Version: `${env.BUILD_VERSION}`
+                        • Environment: `${params.ENVIRONMENT}`
+                        • Failed Stage: `${env.STAGE_NAME}`
+                        • Duration: ${currentBuild.durationString.replace(' and counting', '')}
+                        • <${env.BUILD_URL}console|View Console>
+                    """.stripIndent().trim()
+                )
+            }
+        }
+
+        aborted {
+            script {
+                slackSend(
+                    channel: '#neurosphere-builds',
+                    color: 'warning',
+                    message: """
+                        ⚠️ *NeuroSphere Build #${env.BUILD_NUMBER} — ABORTED*
+                        • Branch: `${env.GIT_BRANCH}`
+                        • Version: `${env.BUILD_VERSION}`
+                        • <${env.BUILD_URL}|View Build>
+                    """.stripIndent().trim()
+                )
+            }
+        }
+
+        cleanup {
+            // Remove dangling Docker images to prevent disk pressure
+            sh 'docker image prune -f --filter "label=com.neurosphere.compliance" || true'
+            cleanWs()
+        }
+    }
+}

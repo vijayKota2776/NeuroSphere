@@ -1,0 +1,55 @@
+# =============================================================================
+# NeuroSphere — Default Deny Network Policies
+# =============================================================================
+# Implements a zero-trust network baseline for security-critical namespaces.
+# All ingress traffic is denied by default; explicit allow policies must be
+# created to permit communication. This is required for IEC-62443 Zone/Conduit
+# compliance and HIPAA network segmentation requirements.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Default deny all ingress in neurosphere-core namespace
+# All application-to-application traffic must be explicitly allowed via
+# separate NetworkPolicy resources.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress-core
+  namespace: neurosphere-core
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: default-deny
+  annotations:
+    description: "Zero-trust baseline: deny all ingress to core application pods"
+    compliance: "IEC-62443 Zone/Conduit model — default deny"
+spec:
+  podSelector: {}       # Applies to ALL pods in neurosphere-core
+  policyTypes:
+    - Ingress
+  # No ingress rules = deny all ingress traffic
+
+---
+# -----------------------------------------------------------------------------
+# Default deny all ingress in neurosphere-vault namespace
+# Vault contains encryption keys, PKI certificates, and service credentials.
+# Access must be tightly controlled and auditable.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress-vault
+  namespace: neurosphere-vault
+  labels:
+    project: neurosphere
+    managed-by: kubectl
+    policy-type: default-deny
+  annotations:
+    description: "Zero-trust baseline: deny all ingress to Vault secrets management pods"
+    compliance: "HIPAA encryption controls — restrict access to key management"
+spec:
+  podSelector: {}       # Applies to ALL pods in neurosphere-vault
+  policyTypes:
+    - Ingress
+  # No ingress rules = deny all ingress traffic

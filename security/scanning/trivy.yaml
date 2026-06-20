@@ -1,0 +1,107 @@
+# =============================================================================
+# NeuroSphere Container Security Scanner Configuration — Trivy
+# =============================================================================
+# Purpose:  Scan container images, filesystems, and IaC for vulnerabilities,
+#           misconfigurations, and embedded secrets.
+# Scope:    All NeuroSphere Medical Robotics microservice images
+# Standard: Aligned with FDA 21 CFR Part 11, IEC 62443, HIPAA §164.312
+# Review:   Quarterly or after any CVE advisory affecting base images
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Severity Levels
+# ---------------------------------------------------------------------------
+# Report CRITICAL, HIGH, and MEDIUM findings.
+# LOW and UNKNOWN are excluded from CI gate but still logged for audit.
+severity:
+  - CRITICAL
+  - HIGH
+  - MEDIUM
+
+# ---------------------------------------------------------------------------
+# Vulnerability Scanning
+# ---------------------------------------------------------------------------
+vulnerability:
+  type:
+    - os          # OS-level packages (Alpine apk, Debian apt, etc.)
+    - library     # Application-level deps (pip, npm, Go modules)
+  ignore-unfixed: true   # Skip CVEs with no available patch yet
+  # NOTE: Unfixed CVEs are still tracked in the audit log for risk register
+
+# ---------------------------------------------------------------------------
+# Security Checks
+# ---------------------------------------------------------------------------
+scan:
+  security-checks:
+    - vuln        # Known vulnerabilities (NVD, GHSA, vendor advisories)
+    - config      # Dockerfile / Kubernetes manifest misconfigurations
+    - secret      # Embedded secrets, tokens, and private keys
+
+  # File patterns to skip during secret scanning (test fixtures, docs)
+  skip-files:
+    - "**/*_test.go"
+    - "**/test_*.py"
+    - "**/tests/**"
+    - "**/*.md"
+    - "**/fixtures/**"
+
+  # Directories to skip entirely
+  skip-dirs:
+    - ".git"
+    - "node_modules"
+    - ".venv"
+    - "__pycache__"
+    - "docs"
+
+# ---------------------------------------------------------------------------
+# Vulnerability Database
+# ---------------------------------------------------------------------------
+db:
+  skip-update: false          # Always pull latest vulnerability DB
+  light: false                # Use full DB for comprehensive scanning
+  repository: "ghcr.io/aquasecurity/trivy-db"
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+cache:
+  dir: "/tmp/trivy-cache"
+  ttl: "24h"                  # Refresh cache every 24 hours
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output: table                 # Console output format
+format: json                  # Report file format
+
+# ---------------------------------------------------------------------------
+# Misconfiguration Scanning — Kubernetes & Docker
+# ---------------------------------------------------------------------------
+misconfiguration:
+  # Built-in policy checks for Dockerfiles and K8s manifests
+  include:
+    - "dockerfile"
+    - "kubernetes"
+  # Custom OPA/Rego policies for NeuroSphere-specific rules
+  policy-dirs:
+    - "./security/policies/rego"
+
+# ---------------------------------------------------------------------------
+# Image-specific Settings
+# ---------------------------------------------------------------------------
+image:
+  # Remove credentials from scan results
+  removed-pkgs: false
+  input: []
+  # NeuroSphere base images to scan regularly
+  # (overridden per-service in CI pipeline)
+
+# ---------------------------------------------------------------------------
+# Compliance Mapping (for audit trail)
+# ---------------------------------------------------------------------------
+# Tag scan results with applicable compliance frameworks
+# These tags appear in the JSON report for GRC tool ingestion
+# compliance:
+#   - hipaa
+#   - iec-62443
+#   - fda-21-cfr-11

@@ -1,0 +1,185 @@
+# ===========================================================================
+# NeuroSphere — Jenkins Configuration as Code (JCasC)
+#
+# Defines the entire Jenkins controller configuration declaratively.
+# Applied automatically when Jenkins starts with the JCasC plugin.
+#
+# Healthcare Compliance:
+#   - Role-based access control for HIPAA audit requirements
+#   - Build log retention for FDA 21 CFR Part 11
+#   - Credential management via Jenkins credential store
+# ===========================================================================
+
+jenkins:
+  systemMessage: |
+    ═══════════════════════════════════════════════════════════════
+     NeuroSphere Medical Robotics — CI/CD Platform
+     HIPAA-Compliant  |  IEC 62443  |  FDA 21 CFR Part 11
+    ═══════════════════════════════════════════════════════════════
+     All pipeline activities are logged for regulatory compliance.
+     Unauthorized access is prohibited and will be reported.
+    ═══════════════════════════════════════════════════════════════
+
+  numExecutors: 0  # Controller should not run builds directly
+  mode: EXCLUSIVE
+
+  # --------------------------------------------------------------------------
+  # Security Realm — Local user database
+  # --------------------------------------------------------------------------
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          name: "NeuroSphere Admin"
+          password: "${JENKINS_ADMIN_PASSWORD:-changeme}"
+        - id: "deployer"
+          name: "NeuroSphere Deployer"
+          password: "${JENKINS_DEPLOYER_PASSWORD:-changeme}"
+        - id: "developer"
+          name: "NeuroSphere Developer"
+          password: "${JENKINS_DEVELOPER_PASSWORD:-changeme}"
+
+  # --------------------------------------------------------------------------
+  # Authorization — Role-Based Strategy
+  # --------------------------------------------------------------------------
+  authorizationStrategy:
+    roleBased:
+      roles:
+        global:
+          - name: "admin"
+            description: "Full administrative access — infrastructure team only"
+            permissions:
+              - "Overall/Administer"
+            entries:
+              - user: "admin"
+
+          - name: "deployer"
+            description: "Can deploy to staging and production environments"
+            permissions:
+              - "Overall/Read"
+              - "Job/Build"
+              - "Job/Cancel"
+              - "Job/Read"
+              - "Job/Workspace"
+              - "Run/Replay"
+              - "Run/Update"
+            entries:
+              - user: "deployer"
+
+          - name: "developer"
+            description: "Can trigger dev builds and view results"
+            permissions:
+              - "Overall/Read"
+              - "Job/Build"
+              - "Job/Read"
+              - "Job/Workspace"
+            entries:
+              - user: "developer"
+
+          - name: "readonly"
+            description: "View-only access for auditors and compliance officers"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+
+  # --------------------------------------------------------------------------
+  # Agent Configuration — Cloud-based agents
+  # --------------------------------------------------------------------------
+  clouds:
+    - docker:
+        name: "neurosphere-docker-cloud"
+        dockerApi:
+          dockerHost:
+            uri: "unix:///var/run/docker.sock"
+        templates:
+          - labelString: "neurosphere-agent"
+            dockerTemplateBase:
+              image: "neurosphere/jenkins-agent:latest"
+              mounts:
+                - "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock"
+            remoteFs: "/home/jenkins/agent"
+            instanceCapStr: "5"
+            retentionStrategy:
+              idleMinutes: 10
+
+  # --------------------------------------------------------------------------
+  # Global Properties
+  # --------------------------------------------------------------------------
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "PROJECT_NAME"
+            value: "neurosphere"
+          - key: "AWS_DEFAULT_REGION"
+            value: "us-east-1"
+          - key: "DOCKER_REGISTRY"
+            value: "${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com"
+          - key: "HIPAA_COMPLIANCE_MODE"
+            value: "enabled"
+
+# --------------------------------------------------------------------------
+# Unclassified — Plugin configurations
+# --------------------------------------------------------------------------
+unclassified:
+  # Location configuration
+  location:
+    url: "${JENKINS_URL:-http://localhost:8080/}"
+    adminAddress: "devops@neurosphere.io"
+
+  # Global Pipeline Libraries
+  globalLibraries:
+    libraries:
+      - name: "neurosphere-shared-lib"
+        defaultVersion: "main"
+        implicit: true
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "${SHARED_LIB_REPO:-https://github.com/neurosphere/jenkins-shared-library.git}"
+                credentialsId: "github-token"
+
+  # Slack Notification Plugin
+  slackNotifier:
+    teamDomain: "neurosphere"
+    tokenCredentialId: "slack-webhook-url"
+    room: "#cicd-notifications"
+    sendAsText: true
+
+  # Timestamper Plugin
+  timestamper:
+    allPipelines: true
+
+  # Build Discarder (global default)
+  buildDiscarders:
+    configuredBuildDiscarders:
+      - "jobBuildDiscarder"
+      - defaultBuildDiscarder:
+          discarder:
+            logRotator:
+              numToKeepStr: "30"
+              daysToKeepStr: "90"  # FDA requires 90-day build log retention
+
+# --------------------------------------------------------------------------
+# Tool Installations
+# --------------------------------------------------------------------------
+tool:
+  git:
+    installations:
+      - name: "Default"
+        home: "git"
+
+  nodejs:
+    installations:
+      - name: "NodeJS-20"
+        properties:
+          - installSource:
+              installers:
+                - nodeJSInstaller:
+                    id: "20.11.1"
+                    npmPackages: "eslint"
+
+# --------------------------------------------------------------------------
+# Credentials — configured separately via credentials.yaml
+# --------------------------------------------------------------------------

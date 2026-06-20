@@ -1,0 +1,105 @@
+# =============================================================================
+# NeuroSphere Medical Robotics — Chaos Experiment: Pod Failure
+# =============================================================================
+# Purpose:    Validate that NeuroSphere services survive random pod termination
+#             and that Kubernetes self-healing (ReplicaSets, PDBs) restores
+#             desired state within acceptable clinical SLOs.
+#
+# Risk Level: MEDIUM
+# Blast Radius: Single pod in neurosphere-core namespace
+# Expected Outcome:
+#   - Terminated pod is rescheduled within 30 seconds
+#   - No patient data loss (persistent volumes unaffected)
+#   - Health endpoints return 200 within 45 seconds of pod restart
+#   - No surgical procedure interruption (safety gate enforced)
+#
+# Prerequisites:
+#   - safety-rules.yaml guardrails applied
+#   - No active surgical procedures (checked via pre-hook)
+#   - Steady-state validation passes
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: neurosphere-pod-failure
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: pod-lifecycle
+    chaos.neurosphere.io/risk-level: medium
+    chaos.neurosphere.io/blast-radius: single-pod
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Randomly terminates one NeuroSphere pod to validate Kubernetes
+      self-healing, PodDisruptionBudget enforcement, and service resilience.
+    chaos.neurosphere.io/owner: platform-reliability@neurosphere.io
+    chaos.neurosphere.io/runbook: https://runbooks.neurosphere.io/chaos/pod-failure
+    chaos.neurosphere.io/jira: NEURO-CHAOS-001
+    chaos.neurosphere.io/safety-gate: surgical-procedure-check
+spec:
+  action: pod-kill
+  mode: one
+  # Grace period allows in-flight requests to drain before termination.
+  # Clinical data pipelines typically flush within 10 seconds.
+  gracePeriod: 10
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      project: neurosphere
+    # SAFETY: Exclude critical patient-facing pods from random kill.
+    # These services have dedicated, more controlled chaos experiments.
+    expressionSelectors:
+      - key: neurosphere.io/chaos-exempt
+        operator: NotIn
+        values:
+          - "true"
+      - key: neurosphere.io/active-procedure
+        operator: NotIn
+        values:
+          - "true"
+  scheduler:
+    cron: '@every 30m'
+  duration: '30s'
+
+---
+# =============================================================================
+# Safety Pre-Check: Ensure no active surgical procedures before pod-kill
+# =============================================================================
+# This Schedule pauses the experiment if the safety webhook reports active
+# procedures. Implemented via Chaos Mesh's ConditionalBranch in workflow mode.
+# When run standalone, the label selector above provides static safety.
+# =============================================================================
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: neurosphere-pod-failure-targeted
+  namespace: neurosphere-core
+  labels:
+    app.kubernetes.io/part-of: neurosphere
+    chaos.neurosphere.io/category: pod-lifecycle
+    chaos.neurosphere.io/risk-level: low
+    chaos.neurosphere.io/blast-radius: single-pod
+  annotations:
+    chaos.neurosphere.io/description: >-
+      Targeted pod-kill for non-critical services only. Used during
+      business-hours chaos testing when patient systems may be active.
+    chaos.neurosphere.io/safety-gate: always-safe
+spec:
+  action: pod-kill
+  mode: one
+  gracePeriod: 10
+  selector:
+    namespaces:
+      - neurosphere-core
+    labelSelectors:
+      project: neurosphere
+      neurosphere.io/tier: non-critical
+    expressionSelectors:
+      - key: neurosphere.io/chaos-exempt
+        operator: NotIn
+        values:
+          - "true"
+  duration: '30s'

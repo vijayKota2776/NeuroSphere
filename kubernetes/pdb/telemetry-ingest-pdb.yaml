@@ -1,0 +1,21 @@
+# =============================================================================
+# PodDisruptionBudget: telemetry-ingest-service
+# =============================================================================
+# Ensures continuous telemetry ingestion during cluster maintenance.
+# At least 1 pod must remain to buffer incoming sensor/device telemetry
+# and prevent data loss during voluntary disruptions.
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: telemetry-ingest-pdb
+  namespace: neurosphere-core
+  labels:
+    app: telemetry-ingest-service
+    component: disruption-budget
+    part-of: neurosphere
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: telemetry-ingest-service

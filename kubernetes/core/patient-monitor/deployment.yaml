@@ -1,0 +1,129 @@
+# =============================================================================
+# NeuroSphere — Patient Monitor Service Deployment
+# =============================================================================
+# The Patient Monitor Service provides real-time tracking of patient vital
+# signs during surgical procedures: heart rate, blood pressure, SpO2,
+# respiratory rate, core temperature, and EtCO2. It runs anomaly detection
+# algorithms to alert surgical teams of deteriorating patient conditions.
+#
+# Compliance: HIPAA (Health Insurance Portability and Accountability Act)
+# Criticality: CRITICAL — patient safety depends on continuous monitoring
+# Note: 3 replicas for high availability — this is a life-critical service
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patient-monitor-service
+  namespace: neurosphere-core
+  labels:
+    app: patient-monitor-service
+    tier: backend
+    domain: patient-care
+    compliance: hipaa
+    project: neurosphere
+    managed-by: kubectl
+  annotations:
+    description: "Real-time patient vitals monitoring with anomaly detection"
+    compliance-standard: "HIPAA — Protected Health Information handling"
+    criticality: "life-critical"
+spec:
+  replicas: 3              # Critical service — higher replica count for HA
+  selector:
+    matchLabels:
+      app: patient-monitor-service
+  template:
+    metadata:
+      labels:
+        app: patient-monitor-service
+        tier: backend
+        domain: patient-care
+        compliance: hipaa
+        project: neurosphere
+      annotations:
+        # -- Prometheus scraping configuration --
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5001"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        runAsNonRoot: true
+
+      containers:
+        - name: patient-monitor-service
+          image: neurosphere/patient-monitor-service:latest
+          ports:
+            - name: http
+              containerPort: 5001
+              protocol: TCP
+
+          # -- Resource requests and limits --
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+          # -- Liveness probe: is the process alive? --
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Readiness probe: is the service ready to accept traffic? --
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 5001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -- Environment variables from ConfigMap --
+          env:
+            - name: SERVICE_NAME
+              value: "patient-monitor-service"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: LOG_LEVEL
+            - name: FLASK_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: FLASK_ENV
+            - name: METRICS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: METRICS_ENABLED
+            - name: ANOMALY_RATE
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: ANOMALY_RATE
+            - name: VITALS_UPDATE_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: VITALS_UPDATE_INTERVAL
+            - name: SERVICE_DISCOVERY_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: neurosphere-config
+                  key: SERVICE_DISCOVERY_ENABLED
+
+          # -- Container security context --
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false

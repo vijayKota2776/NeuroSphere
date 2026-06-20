@@ -1,0 +1,20 @@
+# =============================================================================
+# PodDisruptionBudget: diagnostic-engine-service
+# =============================================================================
+# Maintains minimum diagnostic processing capacity during cluster maintenance.
+# At least 1 pod must remain to handle in-flight diagnostic analyses.
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: diagnostic-engine-pdb
+  namespace: neurosphere-core
+  labels:
+    app: diagnostic-engine-service
+    component: disruption-budget
+    part-of: neurosphere
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: diagnostic-engine-service
